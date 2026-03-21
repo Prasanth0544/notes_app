@@ -409,8 +409,20 @@ def list_notes():
             {'content': {'$regex': q, '$options': 'i'}},
             {'tags':    {'$regex': q, '$options': 'i'}},
         ]
-    docs = notes_col.find(query).sort('modified', -1)
-    return jsonify([note_to_dict(d) for d in docs])
+    # Only fetch lightweight fields for the list — skip full content (can be MBs with images)
+    projection = {'title': 1, 'tags': 1, 'created': 1, 'modified': 1, 'user_id': 1}
+    docs = notes_col.find(query, projection).sort('modified', -1)
+    results = []
+    for d in docs:
+        results.append({
+            'id':       str(d['_id']),
+            'title':    d.get('title', 'Untitled Note'),
+            'content':  '',  # Don't send full content in list view
+            'tags':     d.get('tags', []),
+            'created':  d.get('created', 0),
+            'modified': d.get('modified', 0),
+        })
+    return jsonify(results)
 
 
 @app.route('/api/notes/<note_id>', methods=['GET'])
@@ -505,6 +517,75 @@ def upload_image():
         'note_id': request.form.get('note_id', 'inline'),
     }), 201
 
+# ── Sync API (for mobile app) ─────────────────────────────────
+@app.route('/api/sync/pull', methods=['POST'])
+@jwt_required()
+def sync_pull():
+    """Mobile → pull all notes modified after a given timestamp."""
+    uid   = get_jwt_identity()
+    since = request.json.get('since', 0)  # epoch ms
+    docs  = list(notes_col.find({
+        'user_id': uid,
+        'modified': {'$gt': since}
+    }).sort('modified', -1))
+    return jsonify([{
+        'id':       str(d['_id']),
+        'title':    d.get('title', ''),
+        'content':  d.get('content', ''),
+        'tags':     d.get('tags', []),
+        'created':  d.get('created', 0),
+        'modified': d.get('modified', 0),
+    } for d in docs])
+
+
+@app.route('/api/sync/push', methods=['POST'])
+@jwt_required()
+def sync_push():
+    """Mobile → push an array of locally-changed notes to Atlas."""
+    uid   = get_jwt_identity()
+    notes = request.json.get('notes', [])
+    results = []
+    for n in notes:
+        cloud_id = n.get('cloud_id')  # Atlas _id if previously synced
+        now_ms   = n.get('modified', int(datetime.now(timezone.utc).timestamp() * 1000))
+        doc_data = {
+            'user_id':  uid,
+            'title':    n.get('title', 'Untitled Note'),
+            'content':  n.get('content', ''),
+            'tags':     n.get('tags', []),
+            'created':  n.get('created', now_ms),
+            'modified': now_ms,
+        }
+        if cloud_id:
+            # Update existing note
+            notes_col.update_one(
+                {'_id': ObjectId(cloud_id), 'user_id': uid},
+                {'$set': doc_data},
+                upsert=True
+            )
+            results.append({'local_id': n.get('local_id'), 'cloud_id': cloud_id, 'status': 'updated'})
+        else:
+            # Insert new note
+            r = notes_col.insert_one(doc_data)
+            results.append({'local_id': n.get('local_id'), 'cloud_id': str(r.inserted_id), 'status': 'created'})
+    return jsonify({'synced': len(results), 'results': results})
+
+
+@app.route('/api/sync/delete', methods=['POST'])
+@jwt_required()
+def sync_delete():
+    """Mobile → delete notes from Atlas that were deleted locally."""
+    uid = get_jwt_identity()
+    ids = request.json.get('ids', [])
+    deleted = 0
+    for cid in ids:
+        try:
+            r = notes_col.delete_one({'_id': ObjectId(cid), 'user_id': uid})
+            deleted += r.deleted_count
+        except Exception:
+            pass
+    return jsonify({'deleted': deleted})
+
 
 # ── Run ───────────────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -516,4 +597,4 @@ if __name__ == '__main__':
     print('  ║   DB:   MongoDB Atlas (notevault)           ║')
     print('  ╚══════════════════════════════════════════════╝')
     print()
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)

@@ -2,11 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>NoteVault – Your Daily Notes</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Sync Status Banner (mobile only) -->
+  <div class="sync-banner hidden" id="syncBanner"></div>
+
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
@@ -149,6 +152,7 @@
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
+  <script src="https://unpkg.com/@capacitor/core@latest/dist/capacitor.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -22,13 +22,13 @@ MONGO_URI = os.getenv('MONGO_URI')
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 DB_PATH   = os.path.join(BASE_DIR, 'notes.db')
 
-# ── Your account details ─────────────────────────────────────────
-USER_EMAIL    = 'prasanthgannavarapu5@gmail.com'
-USER_PASSWORD = 'Prasanth@123'
-USER_NAME     = 'Prasanth'
-USER_AGE      = '20'
-USER_ROLE     = 'Student'
-USER_USERNAME  = 'prasanth'
+# ── Your account details (CHANGE THESE before running) ───────────
+USER_EMAIL    = os.getenv('MIGRATE_EMAIL', 'your_email@example.com')
+USER_PASSWORD = os.getenv('MIGRATE_PASSWORD', 'your_password_here')
+USER_NAME     = os.getenv('MIGRATE_NAME', 'Your Name')
+USER_AGE      = os.getenv('MIGRATE_AGE', '20')
+USER_ROLE     = os.getenv('MIGRATE_ROLE', 'Student')
+USER_USERNAME = os.getenv('MIGRATE_USERNAME', 'username')
 
 # ── Connect ───────────────────────────────────────────────────────
 print('\n🔌 Connecting to MongoDB Atlas…')

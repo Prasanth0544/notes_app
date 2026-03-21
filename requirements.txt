@@ -5,3 +5,4 @@ pymongo[srv]
 bcrypt
 python-dotenv
 requests
+gunicorn

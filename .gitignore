@@ -1,8 +1,30 @@
+# Secrets & local data
 .env
 notes.db
 images/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
+
+# Node / Capacitor
+node_modules/
+mobile/android/
+mobile/.gradle/
+*.apk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Other
+DEPLOYMENT_PLAN.md
+Start_NoteVault.bat

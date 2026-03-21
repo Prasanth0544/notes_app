@@ -571,3 +571,70 @@ body { display: flex; }
 .modal-btn.primary   { background: linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; }
 .modal-btn.danger    { background: rgba(248,113,113,.12); border-color: var(--danger); color: var(--danger); }
 .modal-btn.secondary { background: var(--card-hover); border-color: var(--border); color: var(--muted); }
+
+/* ─── Logo Row ───────────────────────────────────────────── */
+.logo-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* ═══ MOBILE: Sync Banner ═══════════════════════════════════ */
+.sync-banner {
+  padding: 6px 16px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: center;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+.sync-banner.offline {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+}
+.sync-banner.syncing {
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  color: #fff;
+  animation: syncPulse 1.5s infinite;
+}
+.sync-banner.online {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+}
+.sync-banner.hidden {
+  max-height: 0;
+  padding: 0 16px;
+  overflow: hidden;
+  opacity: 0;
+}
+@keyframes syncPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ═══ MOBILE: Unsynced Note Indicator ══════════════════════ */
+.note-item.unsynced {
+  border-color: #f59e0b !important;
+  border-width: 2px;
+  background: rgba(245, 158, 11, 0.06);
+}
+.note-item.unsynced:hover {
+  background: rgba(245, 158, 11, 0.12);
+}
+.unsynced-dot {
+  color: #f59e0b;
+  font-size: 0.6rem;
+  margin-right: 5px;
+  vertical-align: middle;
+  animation: unsyncedBlink 2s infinite;
+}
+@keyframes unsyncedBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ═══ MOBILE: Safe Area for notch/status bar ═══════════════ */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .sidebar-header {
+    padding-top: calc(20px + env(safe-area-inset-top));
+  }
+  .sync-banner {
+    padding-top: calc(6px + env(safe-area-inset-top));
+  }
+}
