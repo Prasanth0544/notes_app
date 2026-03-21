@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NoteVault – Set Up Your Profile</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="login.css" />
+  <style>
+    .role-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .role-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 14px 8px;
+      border-radius: 12px;
+      border: 2px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      cursor: pointer;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+      user-select: none;
+    }
+    .role-card span.emoji { font-size: 1.6rem; }
+    .role-card:hover { border-color: #6c63ff; color: #e2e8f0; background: rgba(108,99,255,0.1); }
+    .role-card.selected { border-color: #6c63ff; background: rgba(108,99,255,0.18); color: #a78bfa; }
+    .step-indicator { display: flex; gap: 8px; justify-content: center; margin-bottom: 24px; }
+    .step-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.15); transition: background 0.3s; }
+    .step-dot.done { background: #6c63ff; }
+    .profile-avatar {
+      width: 72px; height: 72px; border-radius: 50%;
+      background: linear-gradient(135deg, #6c63ff, #a78bfa);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2rem; margin: 0 auto 16px; color: #fff;
+    }
+    .skip-link { text-align: center; margin-top: 16px; }
+    .skip-link a { color: #6c63ff; font-size: 0.82rem; text-decoration: none; cursor: pointer; }
+    .skip-link a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="bg-orbs">
+    <div class="orb orb1"></div>
+    <div class="orb orb2"></div>
+    <div class="orb orb3"></div>
+  </div>
+
+  <div class="auth-wrapper">
+    <div class="brand">
+      <span class="brand-icon">📓</span>
+      <span class="brand-name">NoteVault</span>
+    </div>
+    <p class="brand-tagline">Almost there! Tell us a bit about yourself.</p>
+
+    <div class="auth-card">
+      <div class="step-indicator">
+        <div class="step-dot done"></div>
+        <div class="step-dot done"></div>
+        <div class="step-dot" id="step3dot"></div>
+      </div>
+
+      <div class="profile-avatar" id="avatarCircle">🧑</div>
+
+      <form id="profileForm" class="auth-form" autocomplete="off">
+
+        <div class="field-group">
+          <label>Username <span style="color:#64748b;font-weight:400">(how others see you)</span></label>
+          <input type="text" id="pUsername" placeholder="e.g. prasanth_notes" maxlength="30" />
+        </div>
+
+        <div class="field-group">
+          <label>Display Name</label>
+          <input type="text" id="pName" placeholder="Your full name" />
+        </div>
+
+        <div class="field-group">
+          <label>Age</label>
+          <input type="number" id="pAge" placeholder="e.g. 21" min="5" max="120" />
+        </div>
+
+        <div class="field-group">
+          <label>I am a…</label>
+          <div class="role-grid" id="roleGrid">
+            <button type="button" class="role-card" data-role="Student">
+              <span class="emoji">🎓</span>Student
+            </button>
+            <button type="button" class="role-card" data-role="Developer">
+              <span class="emoji">💻</span>Developer
+            </button>
+            <button type="button" class="role-card" data-role="Designer">
+              <span class="emoji">🎨</span>Designer
+            </button>
+            <button type="button" class="role-card" data-role="Professional">
+              <span class="emoji">💼</span>Professional
+            </button>
+            <button type="button" class="role-card" data-role="Researcher">
+              <span class="emoji">🔬</span>Researcher
+            </button>
+            <button type="button" class="role-card" data-role="Other">
+              <span class="emoji">🌟</span>Other
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary">Save & Open NoteVault →</button>
+      </form>
+
+      <div class="auth-toast hidden" id="profileToast"></div>
+
+      <div class="skip-link">
+        <a id="skipBtn">Skip for now — fill in later</a>
+      </div>
+    </div>
+
+    <p class="footer-note">🔒 This info is private and stored securely.</p>
+  </div>
+
+  <script>
+    const API = 'http://localhost:5000/api';
+    let selectedRole = '';
+
+    // ── Check token ────────────────────────────────────────────
+    // Also capture token from URL (OAuth redirect)
+    const urlToken = new URLSearchParams(location.search).get('token');
+    if (urlToken) localStorage.setItem('nv_token', urlToken);
+
+    const token = localStorage.getItem('nv_token');
+    if (!token) window.location.href = '/login.html';
+
+    // ── Prefill name if we have user data ─────────────────────
+    try {
+      const u = JSON.parse(localStorage.getItem('nv_user') || '{}');
+      if (u.name) document.getElementById('pName').value = u.name;
+      if (u.avatar) {
+        const av = document.getElementById('avatarCircle');
+        av.innerHTML = `<img src="${u.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />`;
+      }
+    } catch {}
+
+    // ── Role selection ─────────────────────────────────────────
+    document.querySelectorAll('.role-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        selectedRole = card.dataset.role;
+      });
+    });
+
+    // ── Toast ──────────────────────────────────────────────────
+    const toast = document.getElementById('profileToast');
+    function showToast(msg, isError = true) {
+      toast.textContent = msg;
+      toast.className = 'auth-toast ' + (isError ? 'err' : 'ok');
+    }
+
+    // ── Submit ─────────────────────────────────────────────────
+    document.getElementById('profileForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      await saveProfile();
+    });
+
+    document.getElementById('skipBtn').addEventListener('click', async () => {
+      // Mark profile as done even if skipped so we don't loop
+      await fetch(API + '/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ profile_done: true }),
+      });
+      window.location.href = '/';
+    });
+
+    async function saveProfile() {
+      const body = {
+        username: document.getElementById('pUsername').value.trim(),
+        name:     document.getElementById('pName').value.trim(),
+        age:      document.getElementById('pAge').value.trim(),
+        role:     selectedRole,
+      };
+      const res = await fetch(API + '/auth/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return showToast(data.error || 'Could not save profile');
+      localStorage.setItem('nv_user', JSON.stringify(data));
+      document.getElementById('step3dot').classList.add('done');
+      showToast('✅ Profile saved! Loading your notes…', false);
+      setTimeout(() => window.location.href = '/', 900);
+    }
+  </script>
+</body>
+</html>

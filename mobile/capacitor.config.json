@@ -1,0 +1,11 @@
+{
+  "appId": "com.notevault.app",
+  "appName": "NoteVault",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "Network": {}
+  }
+}
