@@ -36,8 +36,12 @@ body.light {
   --pre-bg:    #eef0f6;
 }
 
-/* Smooth transition when switching themes */
-*, *::before, *::after { transition: background-color .25s, color .15s, border-color .2s; }
+/* Smooth transition when switching themes – targeted, not wildcard */
+.sidebar, .main, .toolbar, .editor-topbar, .tags-row, .statusbar,
+.note-item, .search-wrap, .user-strip, .btn-theme, .btn-new,
+.modal-box, .toast {
+  transition: background-color .25s, color .15s, border-color .2s;
+}
 
 html, body { height: 100%; overflow: hidden; font-family: var(--font); background: var(--bg); color: var(--text); }
 

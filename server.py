@@ -406,7 +406,6 @@ def list_notes():
     if q:
         query['$or'] = [
             {'title':   {'$regex': q, '$options': 'i'}},
-            {'content': {'$regex': q, '$options': 'i'}},
             {'tags':    {'$regex': q, '$options': 'i'}},
         ]
     # Only fetch lightweight fields for the list — skip full content (can be MBs with images)

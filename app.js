@@ -142,6 +142,13 @@ if (btnLogout) {
 
 // ─── State ────────────────────────────────────────────────────
 let activeId = null, saveTimer = null, allNotes = [], isDirty = false, currentTags = [];
+const noteCache = new Map();
+
+// ─── Debounce helper ──────────────────────────────────────────
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
 
 // ─── Unsaved Changes Modal ────────────────────────────────────
 const modalOverlay = $('modalOverlay');
@@ -229,20 +236,51 @@ async function loadNotesList(q = '') {
 function escHTML(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function stripHTML(h) { const d = document.createElement('div'); d.innerHTML = h; return d.textContent || ''; }
 
+// ─── Update Active Sidebar Item (no DOM rebuild) ─────────────
+function updateActiveItem(id) {
+  notesList.querySelectorAll('.note-item').forEach(li => {
+    li.classList.toggle('active', li.dataset.id === id);
+  });
+}
+
 // ─── Open Note ────────────────────────────────────────────────
 async function openNote(id) {
-  const note = await apiFetch(`/notes/${id}`);
+  // ── Instant visual feedback ──
   activeId = id;
   emptyState.style.display  = 'none';
   editorPanel.style.display = 'flex';
+  updateActiveItem(id);
+
+  // Show cached content immediately, or a loading placeholder
+  let note = noteCache.get(id);
+  if (note) {
+    renderNoteContent(note);
+  } else {
+    // Instant skeleton while waiting for API
+    noteTitleInput.value = 'Loading…';
+    editorBody.innerHTML = '';
+    setSaveStatus('pending');
+    note = await apiFetch(`/notes/${id}`);
+    noteCache.set(id, note);
+    // Guard: user may have clicked another note while awaiting
+    if (activeId !== id) return;
+    renderNoteContent(note);
+  }
+}
+
+function renderNoteContent(note) {
   noteTitleInput.value = note.title || '';
-  editorBody.innerHTML = note.content || '';
+  // Defer heavy DOM work to next frame to unblock the UI thread
+  requestAnimationFrame(() => {
+    editorBody.innerHTML = note.content || '';
+    ensureTrailingParagraph();
+    // Defer word count so the editor paints first
+    requestAnimationFrame(updateWordCount);
+  });
   currentTags = [...(note.tags || [])];
   renderTags();
   noteDate.textContent = 'Last saved: ' + fmtDate(note.modified);
-  updateWordCount();
   setSaveStatus('ok');
-  await loadNotesList(searchInput.value);
 }
 
 // ─── Create Note ──────────────────────────────────────────────
@@ -261,6 +299,7 @@ async function createNote() {
 async function deleteNote() {
   if (!activeId) return;
   if (!confirm('Delete this note? This cannot be undone.')) return;
+  noteCache.delete(activeId);
   await apiFetch(`/notes/${activeId}`, { method: 'DELETE' });
   activeId = null;
   editorPanel.style.display = 'none';
@@ -279,19 +318,29 @@ function scheduleSave() {
 
 async function saveCurrentNote() {
   if (!activeId) return;
+  const newTitle = noteTitleInput.value.trim() || 'Untitled Note';
+  const newTags  = [...currentTags];
+  // Check if sidebar-visible data changed (title or tags)
+  const cached   = noteCache.get(activeId);
+  const sidebarChanged = !cached
+    || cached.title !== newTitle
+    || JSON.stringify(cached.tags) !== JSON.stringify(newTags);
   try {
     const updated = await apiFetch(`/notes/${activeId}`, {
       method: 'PUT',
       body: JSON.stringify({
-        title:   noteTitleInput.value.trim() || 'Untitled Note',
+        title:   newTitle,
         content: editorBody.innerHTML,
-        tags:    currentTags,
+        tags:    newTags,
       }),
     });
+    // Update cache with latest data
+    noteCache.set(activeId, updated);
     noteDate.textContent = 'Last saved: ' + fmtDate(updated.modified);
     isDirty = false;
     setSaveStatus('ok');
-    await loadNotesList(searchInput.value);
+    // Only rebuild sidebar if title/tags changed (visible in list)
+    if (sidebarChanged) await loadNotesList(searchInput.value);
   } catch(e) {
     if (!e.message.includes('Unauthorized')) {
       setSaveStatus('err');
@@ -307,9 +356,9 @@ function setSaveStatus(s) {
   else                  { saveStatus.className = 'save-err';     saveStatus.textContent = '✖ Error'; }
 }
 
-// ─── Word Count ───────────────────────────────────────────────
+// ─── Word Count (optimized – uses innerText, no throwaway DOM) ──
 function updateWordCount() {
-  const text = stripHTML(editorBody.innerHTML).trim();
+  const text = (editorBody.innerText || '').trim();
   const words = text ? text.split(/\s+/).length : 0;
   wordCount.textContent = `${words} word${words!==1?'s':''} · ${text.length} chars`;
 }
@@ -418,10 +467,106 @@ $('btnInsertLink').addEventListener('click', () => {
   if (url) { execCmd('createLink', url); scheduleSave(); }
 });
 
+// ─── Table / Block Cursor-Escape Logic ────────────────────────
+const BLOCK_TAGS = new Set(['TABLE','BLOCKQUOTE','PRE','HR','DIV','UL','OL','FIGURE']);
+
+/** Ensure there is always an empty <p> after block-level elements (tables etc.)
+    so the cursor has somewhere to land outside the block. */
+function ensureTrailingParagraph() {
+  const last = editorBody.lastElementChild;
+  if (!last) return;
+  // If the last element is a block element (or the editor has only inline/text),
+  // make sure there is an empty paragraph at the end.
+  if (BLOCK_TAGS.has(last.tagName)) {
+    const p = document.createElement('p');
+    p.innerHTML = '<br>';
+    editorBody.appendChild(p);
+  }
+  // Also ensure every table has a paragraph after it (not just the last one)
+  editorBody.querySelectorAll('table').forEach(tbl => {
+    const next = tbl.nextElementSibling;
+    if (!next || BLOCK_TAGS.has(next.tagName)) {
+      const p = document.createElement('p');
+      p.innerHTML = '<br>';
+      tbl.after(p);
+    }
+  });
+}
+
+/** Click in empty space below content → place cursor in trailing paragraph */
+editorBody.addEventListener('click', e => {
+  // Only trigger when clicking the editor background itself, not child elements
+  if (e.target !== editorBody) return;
+
+  const lastChild = editorBody.lastElementChild;
+  if (!lastChild) return;
+
+  const lastRect = lastChild.getBoundingClientRect();
+  // If the click is below the last element, move cursor to the trailing paragraph
+  if (e.clientY > lastRect.bottom) {
+    ensureTrailingParagraph();
+    // Re-fetch after possible insertion
+    const trailingP = editorBody.lastElementChild;
+    if (trailingP) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(trailingP);
+      range.collapse(true); // beginning
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+});
+
+/** Enter key inside the LAST cell of a table → escape to paragraph below */
+editorBody.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const node = sel.anchorNode;
+
+  // Walk up to find a <td> or <th>
+  const cell = node?.nodeType === 1
+    ? node.closest('td, th')
+    : node?.parentElement?.closest('td, th');
+  if (!cell) return;
+
+  const table = cell.closest('table');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tr');
+  const lastRow = rows[rows.length - 1];
+  const cells = lastRow.querySelectorAll('td, th');
+  const lastCell = cells[cells.length - 1];
+
+  // Only escape if we are in the very last cell
+  if (cell !== lastCell) return;
+
+  e.preventDefault();
+  ensureTrailingParagraph();
+
+  // Find the paragraph right after the table
+  let target = table.nextElementSibling;
+  if (!target || BLOCK_TAGS.has(target.tagName)) {
+    const p = document.createElement('p');
+    p.innerHTML = '<br>';
+    table.after(p);
+    target = p;
+  }
+
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  scheduleSave();
+});
+
 // ─── Editor events ────────────────────────────────────────────
-editorBody.addEventListener('input',  () => { updateWordCount(); scheduleSave(); });
+editorBody.addEventListener('input',  () => { updateWordCount(); ensureTrailingParagraph(); scheduleSave(); });
 noteTitleInput.addEventListener('input', scheduleSave);
-searchInput.addEventListener('input', () => loadNotesList(searchInput.value));
+searchInput.addEventListener('input', debounce(() => loadNotesList(searchInput.value), 300));
 
 // ─── Tag Management ───────────────────────────────────────────
 function renderTags() {
@@ -507,6 +652,22 @@ document.addEventListener('keydown', e => {
   // Load user profile and notes in parallel
   await Promise.all([loadUserProfile(), loadNotesList()]);
   if (allNotes.length > 0) await openNote(allNotes[0].id);
+
+  // ── Background prefetch: cache all notes so switching is instant ──
+  if (allNotes.length > 1) {
+    const prefetchIds = allNotes.slice(1).map(n => n.id);
+    // Stagger fetches to avoid saturating the network
+    (async () => {
+      for (const pid of prefetchIds) {
+        if (!noteCache.has(pid)) {
+          try {
+            const n = await apiFetch(`/notes/${pid}`);
+            noteCache.set(pid, n);
+          } catch { /* ignore prefetch failures */ }
+        }
+      }
+    })();
+  }
 
   showToast('📓 NoteVault ready!');
 })();
