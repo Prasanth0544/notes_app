@@ -21,6 +21,8 @@ from flask_jwt_extended import (
 from pymongo import MongoClient
 from bson import ObjectId
 import bcrypt
+import cloudinary
+import cloudinary.uploader
 from dotenv import load_dotenv
 
 # ── Load .env ────────────────────────────────────────────────────
@@ -33,6 +35,13 @@ GOOGLE_CLIENT_SEC = os.getenv('GOOGLE_CLIENT_SECRET', '')
 GITHUB_CLIENT_ID  = os.getenv('GITHUB_CLIENT_ID', '')
 GITHUB_CLIENT_SEC = os.getenv('GITHUB_CLIENT_SECRET', '')
 APP_URL           = os.getenv('APP_URL', 'http://localhost:5000')
+PORT              = int(os.getenv('PORT', '5000'))
+ALLOWED_ORIGINS   = os.getenv('ALLOWED_ORIGINS', '*')  # comma-separated in prod
+
+# Cloudinary
+CLOUDINARY_CLOUD  = os.getenv('CLOUDINARY_CLOUD_NAME', '')
+CLOUDINARY_KEY    = os.getenv('CLOUDINARY_API_KEY', '')
+CLOUDINARY_SECRET = os.getenv('CLOUDINARY_API_SECRET', '')
 
 if not MONGO_URI:
     print('  ⚠️  MONGO_URI not set in .env – cannot start.')
@@ -47,7 +56,8 @@ app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='')
 app.config['JWT_SECRET_KEY']            = JWT_SECRET_KEY
 app.config['JWT_ACCESS_TOKEN_EXPIRES']  = timedelta(days=30)
 
-CORS(app, origins='*', supports_credentials=True)
+cors_origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS == '*' else [o.strip() for o in ALLOWED_ORIGINS.split(',')]
+CORS(app, origins=cors_origins, supports_credentials=True)
 jwt = JWTManager(app)
 
 # ── MongoDB ───────────────────────────────────────────────────────
@@ -62,6 +72,18 @@ users_col.create_index('oauth_id', sparse=True)
 notes_col.create_index([('user_id', 1), ('modified', -1)])
 
 print('  ✅ Connected to MongoDB Atlas – database: notevault')
+
+# ── Cloudinary ────────────────────────────────────────────────────
+if CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET:
+    cloudinary.config(
+        cloud_name  = CLOUDINARY_CLOUD,
+        api_key     = CLOUDINARY_KEY,
+        api_secret  = CLOUDINARY_SECRET,
+        secure      = True,
+    )
+    print('  ✅ Cloudinary configured')
+else:
+    print('  ⚠️  Cloudinary not configured – images will use base64 fallback')
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -388,6 +410,16 @@ def update_profile():
     updates = {k: v for k, v in updates.items() if v}
     updates['profile_done'] = True
 
+    # Handle backup password (for OAuth users who want email+password login)
+    backup_pw = data.get('backup_password', '').strip()
+    if backup_pw and len(backup_pw) >= 6:
+        updates['password_hash'] = bcrypt.hashpw(backup_pw.encode(), bcrypt.gensalt())
+        # Ensure 'email' is in auth_providers so they can use email+password login
+        users_col.update_one(
+            {'_id': ObjectId(user_id)},
+            {'$addToSet': {'auth_providers': 'email'}}
+        )
+
     users_col.update_one({'_id': ObjectId(user_id)}, {'$set': updates})
     user = users_col.find_one({'_id': ObjectId(user_id)})
     return jsonify(user_to_dict(user))
@@ -491,7 +523,7 @@ def delete_note(note_id):
     return jsonify({'ok': True, 'deleted': result.deleted_count})
 
 
-# ── Image Upload (Base64 inline) ──────────────────────────────────
+# ── Image Upload (Cloudinary or Base64 fallback) ─────────────────
 
 @app.route('/api/images', methods=['POST'])
 @jwt_required()
@@ -503,6 +535,26 @@ def upload_image():
     if ext not in ALLOWED_EXT:
         return jsonify({'error': 'File type not allowed'}), 400
 
+    # ── Cloudinary upload (production) ──
+    if CLOUDINARY_CLOUD and CLOUDINARY_KEY:
+        try:
+            user_id = get_jwt_identity()
+            result = cloudinary.uploader.upload(
+                f,
+                folder=f'notevault/{user_id}',
+                public_id=f'{uuid.uuid4().hex[:12]}',
+                resource_type='image',
+                overwrite=False,
+            )
+            return jsonify({
+                'url':     result['secure_url'],
+                'name':    f.filename or 'image.png',
+                'note_id': request.form.get('note_id', 'inline'),
+            }), 201
+        except Exception as e:
+            return jsonify({'error': f'Cloudinary upload failed: {str(e)}'}), 500
+
+    # ── Base64 fallback (local dev without Cloudinary) ──
     mime_map = {
         'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
         'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
@@ -591,9 +643,9 @@ if __name__ == '__main__':
     print()
     print('  ╔══════════════════════════════════════════════╗')
     print('  ║   NoteVault Server – running!                ║')
-    print('  ║   Open: http://localhost:5000               ║')
+    print(f'  ║   Open: http://localhost:{PORT:<19}║')
     print('  ║   Auth: Email · Phone · Google · GitHub     ║')
     print('  ║   DB:   MongoDB Atlas (notevault)           ║')
     print('  ╚══════════════════════════════════════════════╝')
     print()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=PORT, debug=False)

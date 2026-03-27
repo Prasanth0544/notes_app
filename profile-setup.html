@@ -111,6 +111,18 @@
           </div>
         </div>
 
+        <!-- Backup password for remote login -->
+        <div class="field-group" id="backupPwGroup">
+          <label>🔑 Set a Backup Password <span style="color:#64748b;font-weight:400">(for login without Google/GitHub)</span></label>
+          <div class="pw-wrap" style="position:relative">
+            <input type="password" id="pPassword" placeholder="Min 6 characters" minlength="6" />
+            <button type="button" class="pw-toggle" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:1.1rem;" onclick="const i=document.getElementById('pPassword');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'👁':'🙈'">👁</button>
+          </div>
+          <div style="font-size:0.72rem;color:#64748b;margin-top:6px;line-height:1.4">
+            ⚡ This lets you sign in with your email + this password if you can't use Google/GitHub (e.g. remote areas, no phone for 2FA).
+          </div>
+        </div>
+
         <button type="submit" class="btn-primary">Save & Open NoteVault →</button>
       </form>
 
@@ -125,7 +137,9 @@
   </div>
 
   <script>
-    const API = 'http://localhost:5000/api';
+    const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? 'http://localhost:5000/api'
+      : '/api';
     let selectedRole = '';
 
     // ── Check token ────────────────────────────────────────────
@@ -179,11 +193,16 @@
     });
 
     async function saveProfile() {
+      const password = document.getElementById('pPassword').value;
+      if (password && password.length < 6) {
+        return showToast('Backup password must be at least 6 characters');
+      }
       const body = {
         username: document.getElementById('pUsername').value.trim(),
         name:     document.getElementById('pName').value.trim(),
         age:      document.getElementById('pAge').value.trim(),
         role:     selectedRole,
+        backup_password: password || '',
       };
       const res = await fetch(API + '/auth/profile', {
         method: 'PUT',

@@ -1,12 +1,14 @@
 /* ============================================================
    NoteVault – app.js  (MongoDB Atlas + JWT Auth edition)
-   All storage goes through http://localhost:5000/api
    Auth token stored in localStorage as 'nv_token'
    ============================================================ */
 
 'use strict';
 
-const API = 'http://localhost:5000/api';
+// In local dev → hit Flask directly; in production (Vercel) → use relative /api (proxied to Render)
+const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? 'http://localhost:5000/api'
+  : '/api';
 
 // ─── Auth Guard ───────────────────────────────────────────────
 const token = localStorage.getItem('nv_token');
