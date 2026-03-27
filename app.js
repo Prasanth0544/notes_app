@@ -5,6 +5,18 @@
 
 'use strict';
 
+// Offline stubs — overridden by offline.js on mobile if Capacitor is available
+if (typeof isOnline === 'undefined') { window.isOnline = () => true; }
+if (typeof isOfflineReady === 'undefined') { window.isOfflineReady = () => false; }
+if (typeof cacheNotes === 'undefined') { window.cacheNotes = async () => {}; }
+if (typeof cacheNote === 'undefined') { window.cacheNote = async () => {}; }
+if (typeof getOfflineNotes === 'undefined') { window.getOfflineNotes = async () => []; }
+if (typeof getOfflineNote === 'undefined') { window.getOfflineNote = async () => null; }
+if (typeof saveNoteOffline === 'undefined') { window.saveNoteOffline = async () => null; }
+if (typeof deleteNoteOffline === 'undefined') { window.deleteNoteOffline = async () => {}; }
+if (typeof offlineInit === 'undefined') { window.offlineInit = async () => false; }
+if (typeof syncQueue === 'undefined') { window.syncQueue = async () => {}; }
+
 // Detect environment for API base URL:
 //  - Capacitor (mobile): runs at https://localhost (no port) → use Render URL
 //  - Local dev: runs at localhost:5000 → use local Flask
@@ -208,13 +220,30 @@ window.addEventListener('beforeunload', e => {
 // ─── Render Notes List ────────────────────────────────────────
 async function loadNotesList(q = '') {
   try {
-    const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
-    allNotes = await apiFetch(url);
+    if (isOnline()) {
+      const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
+      allNotes = await apiFetch(url);
+      // Cache all notes to SQLite for offline use
+      if (isOfflineReady()) await cacheNotes(allNotes);
+    } else {
+      // Offline: load from SQLite
+      allNotes = await getOfflineNotes();
+      if (q) {
+        const ql = q.toLowerCase();
+        allNotes = allNotes.filter(n => (n.title || '').toLowerCase().includes(ql) || (n.content || '').toLowerCase().includes(ql));
+      }
+    }
   } catch(e) {
     if (!e.message.includes('Unauthorized')) {
-      showToast('⚠️ Cannot reach server – is server.py running?', 4000);
+      // Try SQLite fallback
+      if (isOfflineReady()) {
+        allNotes = await getOfflineNotes();
+        showToast('📴 Offline mode — showing cached notes', 3000);
+      } else {
+        showToast('⚠️ Cannot reach server', 4000);
+      }
     }
-    return;
+    if (!allNotes.length) return;
   }
 
   notesList.innerHTML = '';
@@ -231,10 +260,11 @@ async function loadNotesList(q = '') {
     li.className = 'note-item' + (n.id === activeId ? ' active' : '');
     li.dataset.id = n.id;
 
+    const modified = n.modified || n.updated_at;
     const tags = (n.tags || []).map(t => `<span class="note-tag">#${t}</span>`).join('');
     li.innerHTML = `
-      <div class="note-item-title">${escHTML(n.title || 'Untitled')}</div>
-      <div class="note-item-meta"><span>${fmtDate(n.modified)}</span></div>
+      <div class="note-item-title">${escHTML(n.title || 'Untitled')}${n._dirty ? ' <span style="color:var(--accent2);font-size:.7rem">●</span>' : ''}</div>
+      <div class="note-item-meta"><span>${fmtDate(modified)}</span></div>
       <div class="note-item-preview">${stripHTML(n.content || '').slice(0, 80)}</div>
       ${tags ? `<div style="margin-top:4px">${tags}</div>` : ''}
     `;
@@ -270,14 +300,24 @@ async function openNote(id) {
   if (note) {
     renderNoteContent(note);
   } else {
-    // Instant skeleton while waiting for API
     noteTitleInput.value = 'Loading…';
     editorBody.innerHTML = '';
     setSaveStatus('pending');
-    note = await apiFetch(`/notes/${id}`);
-    noteCache.set(id, note);
-    // Guard: user may have clicked another note while awaiting
+    try {
+      if (isOnline()) {
+        note = await apiFetch(`/notes/${id}`);
+        noteCache.set(id, note);
+        if (isOfflineReady()) await cacheNote(note);
+      } else if (isOfflineReady()) {
+        note = await getOfflineNote(id);
+      }
+    } catch {
+      // Fallback to SQLite
+      if (isOfflineReady()) note = await getOfflineNote(id);
+    }
+    if (!note) { showToast('⚠️ Cannot load note'); return; }
     if (activeId !== id) return;
+    noteCache.set(id, note);
     renderNoteContent(note);
   }
 }
@@ -300,11 +340,36 @@ function renderNoteContent(note) {
 // ─── Create Note ──────────────────────────────────────────────
 async function createNote() {
   if (!await checkUnsaved()) return;
-  const note = await apiFetch('/notes', {
-    method: 'POST',
-    body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }),
-  });
-  await openNote(note.id);
+  try {
+    if (isOnline()) {
+      const note = await apiFetch('/notes', {
+        method: 'POST',
+        body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }),
+      });
+      if (isOfflineReady()) await cacheNote(note);
+      await openNote(note.id);
+    } else if (isOfflineReady()) {
+      const note = await saveNoteOffline(null, 'Untitled Note', '', []);
+      noteCache.set(note.id, note);
+      await loadNotesList();
+      await openNote(note.id);
+      showToast('📴 Note created offline — will sync later');
+    } else {
+      showToast('⚠️ No connection');
+      return;
+    }
+  } catch(e) {
+    if (isOfflineReady()) {
+      const note = await saveNoteOffline(null, 'Untitled Note', '', []);
+      noteCache.set(note.id, note);
+      await loadNotesList();
+      await openNote(note.id);
+      showToast('📴 Note created offline — will sync later');
+    } else {
+      showToast('⚠️ Cannot create note');
+      return;
+    }
+  }
   noteTitleInput.focus();
   noteTitleInput.select();
 }
@@ -314,7 +379,14 @@ async function deleteNote() {
   if (!activeId) return;
   if (!confirm('Delete this note? This cannot be undone.')) return;
   noteCache.delete(activeId);
-  await apiFetch(`/notes/${activeId}`, { method: 'DELETE' });
+  try {
+    if (isOnline()) {
+      await apiFetch(`/notes/${activeId}`, { method: 'DELETE' });
+    }
+    if (isOfflineReady()) await deleteNoteOffline(activeId);
+  } catch {
+    if (isOfflineReady()) await deleteNoteOffline(activeId);
+  }
   activeId = null;
   editorPanel.style.display = 'none';
   emptyState.style.display  = 'flex';
@@ -334,31 +406,41 @@ async function saveCurrentNote() {
   if (!activeId) return;
   const newTitle = noteTitleInput.value.trim() || 'Untitled Note';
   const newTags  = [...currentTags];
-  // Check if sidebar-visible data changed (title or tags)
+  const newContent = editorBody.innerHTML;
   const cached   = noteCache.get(activeId);
   const sidebarChanged = !cached
     || cached.title !== newTitle
     || JSON.stringify(cached.tags) !== JSON.stringify(newTags);
   try {
-    const updated = await apiFetch(`/notes/${activeId}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        title:   newTitle,
-        content: editorBody.innerHTML,
-        tags:    newTags,
-      }),
-    });
-    // Update cache with latest data
-    noteCache.set(activeId, updated);
-    noteDate.textContent = 'Last saved: ' + fmtDate(updated.modified);
-    isDirty = false;
-    setSaveStatus('ok');
-    // Only rebuild sidebar if title/tags changed (visible in list)
+    if (isOnline()) {
+      const updated = await apiFetch(`/notes/${activeId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
+      });
+      noteCache.set(activeId, updated);
+      noteDate.textContent = 'Last saved: ' + fmtDate(updated.modified);
+      if (isOfflineReady()) await cacheNote(updated);
+      isDirty = false;
+      setSaveStatus('ok');
+    } else if (isOfflineReady()) {
+      await saveNoteOffline(activeId, newTitle, newContent, newTags);
+      isDirty = false;
+      setSaveStatus('ok');
+      noteDate.textContent = 'Saved offline';
+    } else {
+      throw new Error('No connection');
+    }
     if (sidebarChanged) await loadNotesList(searchInput.value);
   } catch(e) {
-    if (!e.message.includes('Unauthorized')) {
+    if (isOfflineReady()) {
+      await saveNoteOffline(activeId, newTitle, newContent, newTags);
+      isDirty = false;
+      setSaveStatus('ok');
+      noteDate.textContent = 'Saved offline';
+      if (sidebarChanged) await loadNotesList(searchInput.value);
+    } else if (!e.message.includes('Unauthorized')) {
       setSaveStatus('err');
-      showToast('⚠️ Save failed – is server.py running?');
+      showToast('⚠️ Save failed');
     }
   }
 }
@@ -663,25 +745,30 @@ document.addEventListener('keydown', e => {
   const saved = localStorage.getItem('nv_theme');
   applyTheme(saved === 'light');
 
+  // Initialize offline DB (mobile only)
+  if (typeof offlineInit === 'function') {
+    await offlineInit();
+  }
+
   // Load user profile and notes in parallel
   await Promise.all([loadUserProfile(), loadNotesList()]);
   if (allNotes.length > 0) await openNote(allNotes[0].id);
 
   // ── Background prefetch: cache all notes so switching is instant ──
-  if (allNotes.length > 1) {
+  if (allNotes.length > 1 && isOnline()) {
     const prefetchIds = allNotes.slice(1).map(n => n.id);
-    // Stagger fetches to avoid saturating the network
     (async () => {
       for (const pid of prefetchIds) {
         if (!noteCache.has(pid)) {
           try {
             const n = await apiFetch(`/notes/${pid}`);
             noteCache.set(pid, n);
+            if (isOfflineReady()) await cacheNote(n);
           } catch { /* ignore prefetch failures */ }
         }
       }
     })();
   }
 
-  showToast('📓 NoteVault ready!');
+  showToast(isOnline() ? '📓 NoteVault ready!' : '📴 Offline mode');
 })();
