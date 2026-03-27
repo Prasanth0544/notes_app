@@ -14,18 +14,18 @@ const DB_NAME = 'notevault_offline';
 
 // ─── Init: open DB & create tables ────────────────────────────
 async function offlineInit() {
-  if (!window.CapacitorSQLite) {
+  if (!window.Capacitor || !window.Capacitor.Plugins || !window.Capacitor.Plugins.CapacitorSQLite) {
     console.warn('CapacitorSQLite not available — offline disabled');
     return false;
   }
 
   try {
     // Check network status
-    if (window.CapacitorNetwork) {
-      const status = await window.CapacitorNetwork.getStatus();
+    if (window.Capacitor.Plugins.Network) {
+      const status = await window.Capacitor.Plugins.Network.getStatus();
       _isOnline = status.connected;
 
-      window.CapacitorNetwork.addListener('networkStatusChange', (s) => {
+      window.Capacitor.Plugins.Network.addListener('networkStatusChange', (s) => {
         const wasOffline = !_isOnline;
         _isOnline = s.connected;
         updateOfflineBanner();
@@ -38,7 +38,7 @@ async function offlineInit() {
     }
 
     // Open or create the database
-    const sqlite = window.CapacitorSQLite;
+    const sqlite = window.Capacitor.Plugins.CapacitorSQLite;
     await sqlite.createConnection({ database: DB_NAME, encrypted: false, mode: 'no-encryption', version: 1 });
     await sqlite.open({ database: DB_NAME });
     _db = sqlite;
