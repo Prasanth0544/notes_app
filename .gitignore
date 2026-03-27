@@ -12,6 +12,7 @@ venv/
 
 # Node / Capacitor
 node_modules/
+mobile/node_modules/
 mobile/android/
 mobile/.gradle/
 *.apk

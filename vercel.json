@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://YOUR_RENDER_URL.onrender.com/api/:path*"
+      "destination": "https://notes-app-e06a.onrender.com/api/:path*"
     }
   ]
 }
