@@ -57,6 +57,11 @@ app.config['JWT_SECRET_KEY']            = JWT_SECRET_KEY
 app.config['JWT_ACCESS_TOKEN_EXPIRES']  = timedelta(days=30)
 
 cors_origins = ALLOWED_ORIGINS if ALLOWED_ORIGINS == '*' else [o.strip() for o in ALLOWED_ORIGINS.split(',')]
+# Always allow Capacitor mobile app origins
+if cors_origins != '*':
+    for cap_origin in ['capacitor://localhost', 'http://localhost']:
+        if cap_origin not in cors_origins:
+            cors_origins.append(cap_origin)
 CORS(app, origins=cors_origins, supports_credentials=True)
 jwt = JWTManager(app)
 

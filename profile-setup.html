@@ -137,9 +137,12 @@
   </div>
 
   <script>
-    const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-      ? 'http://localhost:5000/api'
-      : '/api';
+    let API = '/api'; // Vercel proxy
+    if (window.Capacitor || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
+      API = 'https://notes-app-e06a.onrender.com/api'; // Mobile absolute URL
+    } else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      API = 'http://localhost:5000/api'; // Local web dev
+    }
     let selectedRole = '';
 
     // ── Check token ────────────────────────────────────────────
@@ -148,7 +151,7 @@
     if (urlToken) localStorage.setItem('nv_token', urlToken);
 
     const token = localStorage.getItem('nv_token');
-    if (!token) window.location.href = '/login.html';
+    if (!token) window.location.href = 'login.html';
 
     // ── Prefill name if we have user data ─────────────────────
     try {
@@ -189,7 +192,7 @@
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ profile_done: true }),
       });
-      window.location.href = '/';
+      window.location.href = 'index.html';
     });
 
     async function saveProfile() {
@@ -214,7 +217,7 @@
       localStorage.setItem('nv_user', JSON.stringify(data));
       document.getElementById('step3dot').classList.add('done');
       showToast('✅ Profile saved! Loading your notes…', false);
-      setTimeout(() => window.location.href = '/', 900);
+      setTimeout(() => window.location.href = 'index.html', 900);
     }
   </script>
 </body>

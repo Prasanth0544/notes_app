@@ -6,14 +6,17 @@
 'use strict';
 
 // In local dev → hit Flask directly; in production (Vercel) → use relative /api (proxied to Render)
-const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ? 'http://localhost:5000/api'
-  : '/api';
+let API = '/api'; // Vercel proxy
+if (window.Capacitor || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
+  API = 'https://notes-app-e06a.onrender.com/api'; // Mobile absolute URL
+} else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+  API = 'http://localhost:5000/api'; // Local web dev
+}
 
 // ─── Auth Guard ───────────────────────────────────────────────
 const token = localStorage.getItem('nv_token');
 if (!token) {
-  window.location.href = '/login.html';
+  window.location.href = 'login.html';
 }
 
 // ─── DOM refs ─────────────────────────────────────────────────
