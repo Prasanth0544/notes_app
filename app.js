@@ -5,12 +5,21 @@
 
 'use strict';
 
-// In local dev → hit Flask directly; in production (Vercel) → use relative /api (proxied to Render)
-let API = '/api'; // Vercel proxy
-if (window.Capacitor || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
-  API = 'https://notes-app-e06a.onrender.com/api'; // Mobile absolute URL
-} else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-  API = 'http://localhost:5000/api'; // Local web dev
+// Detect environment for API base URL:
+//  - Capacitor (mobile): runs at https://localhost (no port) → use Render URL
+//  - Local dev: runs at localhost:5000 → use local Flask
+//  - Vercel (production web): everything else → use /api proxy
+const isLocalhost = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const isCapacitor = isLocalhost && !window.location.port;    // Capacitor = localhost WITHOUT a port
+const isLocalDev  = isLocalhost && window.location.port === '5000';
+
+let API;
+if (isCapacitor) {
+  API = 'https://notes-app-e06a.onrender.com/api';           // Mobile → Render backend
+} else if (isLocalDev) {
+  API = 'http://localhost:5000/api';                           // Local dev → Flask
+} else {
+  API = '/api';                                                // Vercel → proxy
 }
 
 // ─── Auth Guard ───────────────────────────────────────────────
@@ -58,7 +67,7 @@ function getToken() { return localStorage.getItem('nv_token'); }
 function logout() {
   localStorage.removeItem('nv_token');
   localStorage.removeItem('nv_user');
-  window.location.href = '/login.html';
+  window.location.href = 'login.html';
 }
 
 // ─── API helpers ──────────────────────────────────────────────

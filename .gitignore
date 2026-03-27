@@ -2,6 +2,7 @@
 .env
 notes.db
 images/
+Notes/
 
 # Python
 __pycache__/
@@ -12,10 +13,14 @@ venv/
 
 # Node / Capacitor
 node_modules/
-mobile/node_modules/
-mobile/android/
-mobile/.gradle/
+mobile/
 *.apk
+
+# Old migration/deployment scripts
+migrate_sqlite_to_atlas.py
+deploy_oci.sh
+DEPLOYMENT_PLAN.md
+OCI_DEPLOYMENT_GUIDE.md
 
 # IDE
 .idea/
@@ -27,5 +32,4 @@ Thumbs.db
 .DS_Store
 
 # Other
-DEPLOYMENT_PLAN.md
 Start_NoteVault.bat

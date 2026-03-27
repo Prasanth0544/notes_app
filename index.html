@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Mobile hamburger -->
+  <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
   <!-- Sidebar -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
@@ -47,6 +49,9 @@
     <div class="notes-list-label">Notes</div>
     <ul class="notes-list" id="notesList"></ul>
   </aside>
+
+  <!-- Sidebar overlay (mobile) -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <!-- Main editor -->
   <main class="main" id="main">
@@ -150,5 +155,23 @@
   <div class="toast" id="toast"></div>
 
   <script src="app.js"></script>
+  <script>
+    // Mobile sidebar toggle
+    const mobileBtn = document.getElementById('mobileMenuBtn');
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    if (mobileBtn && sidebar) {
+      mobileBtn.addEventListener('click', () => {
+        sidebar.classList.toggle('open');
+        overlay.classList.toggle('show');
+        mobileBtn.textContent = sidebar.classList.contains('open') ? '✕' : '☰';
+      });
+      overlay.addEventListener('click', () => {
+        sidebar.classList.remove('open');
+        overlay.classList.remove('show');
+        mobileBtn.textContent = '☰';
+      });
+    }
+  </script>
 </body>
 </html>

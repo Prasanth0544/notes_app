@@ -517,11 +517,92 @@ body { display: flex; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
+/* ─── Mobile hamburger button (hidden on desktop) ────────── */
+.mobile-menu-btn {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 10001;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  font-size: 1.3rem;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(108,99,255,.4);
+  transition: background .2s;
+}
+.mobile-menu-btn:hover { background: var(--accent2); }
+
+/* ─── Sidebar overlay backdrop (mobile only) ──────────────── */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 999;
+  backdrop-filter: blur(2px);
+}
+
 /* ─── Responsive ─────────────────────────────────────────── */
-@media (max-width: 700px) {
-  .sidebar { width: 220px; min-width: 180px; }
-  .editor-body { padding: 16px 16px; }
-  .toolbar { gap: 2px; padding: 6px 8px; }
+@media (max-width: 768px) {
+  /* Show hamburger button */
+  .mobile-menu-btn { display: flex; align-items: center; justify-content: center; }
+
+  /* Sidebar becomes a slide-in drawer */
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0;
+    width: 280px;
+    height: 100vh;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform .3s cubic-bezier(.16,1,.3,1);
+    box-shadow: none;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+    box-shadow: 4px 0 30px rgba(0,0,0,.4);
+  }
+
+  /* Show overlay when sidebar is open */
+  .sidebar.open ~ .sidebar-overlay,
+  .sidebar-overlay.show { display: block; }
+
+  /* Main takes full width */
+  .main { width: 100%; margin-left: 0; }
+
+  /* Editor adjustments */
+  .editor-body { padding: 14px 16px; font-size: 0.95rem; }
+
+  /* Top bar adjustments for hamburger space */
+  .editor-topbar { padding: 12px 12px 8px 56px; gap: 8px; }
+  .note-title-input { font-size: 1.1rem; }
+
+  /* Toolbar: horizontal scroll instead of wrap */
+  .toolbar {
+    gap: 2px;
+    padding: 6px 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .tb-btn { padding: 6px 8px; font-size: .78rem; flex-shrink: 0; }
+  .tb-divider { margin: 0 2px; }
+
+  /* Tags and status bar */
+  .tags-row { padding: 6px 12px; }
+  .statusbar { padding: 4px 12px; }
+
+  /* Toast at bottom center */
+  .toast { right: 16px; bottom: 16px; left: 16px; text-align: center; }
+
+  /* Empty state padding for hamburger */
+  .empty-state { padding-top: 56px; }
 }
 
 /* ─── Unsaved Changes Modal ──────────────────────────────── */

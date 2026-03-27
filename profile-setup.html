@@ -137,11 +137,17 @@
   </div>
 
   <script>
-    let API = '/api'; // Vercel proxy
-    if (window.Capacitor || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
-      API = 'https://notes-app-e06a.onrender.com/api'; // Mobile absolute URL
-    } else if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      API = 'http://localhost:5000/api'; // Local web dev
+    const isLocalhost = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const isCapacitor = isLocalhost && !window.location.port;
+    const isLocalDev  = isLocalhost && window.location.port === '5000';
+
+    let API;
+    if (isCapacitor) {
+      API = 'https://notes-app-e06a.onrender.com/api';
+    } else if (isLocalDev) {
+      API = 'http://localhost:5000/api';
+    } else {
+      API = '/api';
     }
     let selectedRole = '';
 
