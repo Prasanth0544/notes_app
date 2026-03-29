@@ -4,17 +4,22 @@ notes.db
 images/
 Notes/
 
-# Python
+# Python (legacy – can remove after migration)
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
 
-# Node / Capacitor
+# Node
 node_modules/
-mobile/
+server/node_modules/
+client/node_modules/
+client/dist/
 *.apk
+
+# Capacitor / Mobile
+mobile/
 
 # Old migration/deployment scripts
 migrate_sqlite_to_atlas.py
