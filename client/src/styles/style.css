@@ -332,6 +332,7 @@ body { display: flex; }
   white-space: nowrap;
 }
 .tb-btn:hover { background: var(--card); border-color: var(--border); }
+.tb-btn:active { transform: scale(0.95); }
 .tb-btn.active { background: rgba(108,99,255,.2); border-color: var(--accent); color: var(--accent2); }
 
 .tb-save {
@@ -375,16 +376,65 @@ body { display: flex; }
 .tb-color::-webkit-color-swatch-wrapper { padding: 0; border-radius: 4px; }
 .tb-color::-webkit-color-swatch { border: none; border-radius: 4px; }
 
+/* ─── Size Input Box ─────────────────────────────── */
+.size-input-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.size-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.tb-size-input {
+  width: 45px;
+  padding: 5px 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.8rem;
+  text-align: center;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.tb-size-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(108,99,255,.15);
+}
+
+.tb-size-input::placeholder {
+  color: var(--muted);
+}
+
+/* Remove spinner buttons for number input */
+.tb-size-input::-webkit-outer-spin-button,
+.tb-size-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.tb-size-input[type=number] {
+  -moz-appearance: textfield;
+}
+
 /* ─── Editor Body ─────────────────────────────────────────── */
 .editor-body {
   flex: 1;
   overflow-y: auto;
   padding: 24px 40px;
+  padding-bottom: 600px;
   font-size: 1rem;
   line-height: 1.75;
   color: var(--text);
   outline: none;
   min-height: 0;
+  transition: font-size 0.15s ease;
 }
 .editor-body::-webkit-scrollbar { width: 6px; }
 .editor-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
@@ -595,13 +645,13 @@ body { display: flex; }
   .main { width: 100%; margin-left: 0; }
 
   /* Editor adjustments */
-  .editor-body { padding: 14px 16px; font-size: 0.95rem; }
+  .editor-body { padding: 14px 16px; padding-bottom: 500px; font-size: 0.95rem; }
 
   /* Top bar adjustments for hamburger space */
   .editor-topbar { padding: 12px 12px 8px 56px; gap: 8px; }
   .note-title-input { font-size: 1.1rem; }
 
-  /* Toolbar: horizontal scroll instead of wrap */
+  /* Toolbar: horizontal scroll, compact sizing */
   .toolbar {
     gap: 2px;
     padding: 6px 8px;
@@ -610,8 +660,33 @@ body { display: flex; }
     -webkit-overflow-scrolling: touch;
   }
   .toolbar::-webkit-scrollbar { display: none; }
-  .tb-btn { padding: 6px 8px; font-size: .78rem; flex-shrink: 0; }
+  .tb-btn { padding: 5px 7px; font-size: .74rem; flex-shrink: 0; }
   .tb-divider { margin: 0 2px; }
+
+  /* Normal/Custom select dropdowns — compact on mobile */
+  .tb-select {
+    font-size: .72rem;
+    padding: 3px 4px;
+    min-width: 60px;
+    max-width: 75px;
+    flex-shrink: 0;
+  }
+
+  /* Number inputs inside toolbar — compact on mobile */
+  .tb-select[type="number"] {
+    width: 42px !important;
+    min-width: 42px;
+    height: 26px !important;
+    font-size: .72rem;
+    padding: 2px 4px;
+  }
+
+  /* Color pickers — slightly larger touch target */
+  .tb-color {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+  }
 
   /* Tags and status bar */
   .tags-row { padding: 6px 12px; }
@@ -622,6 +697,19 @@ body { display: flex; }
 
   /* Empty state padding for hamburger */
   .empty-state { padding-top: 56px; }
+}
+
+/* ─── Extra small devices (phones < 400px) ───────────────── */
+@media (max-width: 400px) {
+  .toolbar { padding: 4px 6px; gap: 1px; }
+  .tb-btn { padding: 4px 5px; font-size: .68rem; }
+  .tb-select { font-size: .68rem; min-width: 55px; max-width: 68px; padding: 2px 3px; }
+  .tb-select[type="number"] { width: 38px !important; height: 24px !important; }
+  .tb-color { width: 24px; height: 24px; }
+  .tb-divider { margin: 0 1px; height: 18px; }
+  .editor-body { padding: 10px 12px; padding-bottom: 400px; }
+  .editor-topbar { padding: 10px 10px 6px 50px; }
+  .note-title-input { font-size: 1rem; }
 }
 
 /* ─── Unsaved Changes Modal ──────────────────────────────── */
@@ -675,3 +763,179 @@ body { display: flex; }
 .modal-btn.primary   { background: linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; }
 .modal-btn.danger    { background: rgba(248,113,113,.12); border-color: var(--danger); color: var(--danger); }
 .modal-btn.secondary { background: var(--card-hover); border-color: var(--border); color: var(--muted); }
+
+/* ─── Find & Replace Panel ───────────────────────── */
+.find-replace-panel {
+  position: fixed;
+  bottom: 0;
+  left: 280px;
+  right: 0;
+  background: var(--sidebar);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(0,0,0,.2);
+  z-index: 1000;
+  animation: slideUp .2s ease;
+}
+
+@media (max-width: 768px) {
+  .find-replace-panel { left: 0; }
+}
+
+.find-replace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.find-replace-header h3 {
+  font-size: 0.95rem;
+  color: var(--text);
+  margin: 0;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background .2s, color .2s;
+}
+
+.close-btn:hover {
+  background: var(--card);
+  color: var(--text);
+}
+
+.find-replace-body {
+  display: flex;
+  gap: 16px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+
+.find-group, .replace-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 250px;
+}
+
+.find-group label, .replace-group label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.find-group input, .replace-group input {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.find-group input:focus, .replace-group input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(108,99,255,.1);
+}
+
+.find-btn {
+  padding: 6px 12px;
+  background: rgba(108,99,255,.2);
+  color: var(--accent2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+
+.find-btn:hover {
+  background: rgba(108,99,255,.3);
+  border-color: var(--accent2);
+}
+
+.replace-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.replace-btn {
+  padding: 6px 12px;
+  background: rgba(248,113,113,.12);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, border-color .2s;
+}
+
+.replace-btn:hover {
+  background: rgba(248,113,113,.2);
+  border-color: #ff6b6b;
+}
+
+.replace-btn.all {
+  background: rgba(52,211,153,.12);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.replace-btn.all:hover {
+  background: rgba(52,211,153,.2);
+  border-color: #6ee7b7;
+}
+
+/* ─── Table Styling ──────────────────────────────── */
+.editor-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 16px 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+}
+
+.editor-body table td,
+.editor-body table th {
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.editor-body table th {
+  background: var(--card);
+  font-weight: 600;
+  color: var(--accent2);
+}
+
+.editor-body table tr:hover {
+  background: rgba(108,99,255,.05);
+}
+
+/* ─── Code Styling ──────────────────────────────── */
+.editor-body code {
+  background: var(--pre-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.9em;
+  color: var(--accent2);
+}
+
+.editor-body mark {
+  background: rgba(255,193,7,.6);
+  padding: 1px 3px;
+  border-radius: 2px;
+}

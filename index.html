@@ -90,14 +90,7 @@
         <button class="tb-btn" data-cmd="h2" title="Heading 2">H2</button>
         <button class="tb-btn" data-cmd="h3" title="Heading 3">H3</button>
         <span class="tb-divider"></span>
-        <select class="tb-select" id="fontSizeSel" title="Font size">
-          <option value="1">Tiny</option>
-          <option value="2">Small</option>
-          <option value="3" selected>Normal</option>
-          <option value="4">Large</option>
-          <option value="5">XL</option>
-          <option value="6">XXL</option>
-        </select>
+        <input type="number" class="tb-select" id="fontSizeInput" title="Font size (1-30)" min="1" max="30" value="16" style="width: 55px;" />
         <input type="color" class="tb-color" id="fontColor" title="Text color" value="#e2e8f0" />
         <span class="tb-divider"></span>
         <button class="tb-btn" data-cmd="justifyLeft" title="Align left">⬅</button>

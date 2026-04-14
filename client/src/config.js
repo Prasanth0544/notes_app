@@ -7,9 +7,10 @@ let API;
 if (isCapacitor) {
   API = 'https://notes-app-e06a.onrender.com/api';
 } else if (isLocalDev) {
-  API = 'http://localhost:5000/api';
+  API = 'http://localhost:4000/api';
 } else {
   API = '/api';
 }
 
 export default API;
+

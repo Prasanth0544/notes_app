@@ -76,14 +76,11 @@ async function offlineInit() {
 }
 
 // ─── UI: offline banner ───────────────────────────────────────
+// NOTE: Banner is now controlled by app.js (ping-based server check)
+// This function is kept as no-op to avoid breaking offlineInit()
 function updateOfflineBanner() {
-  let banner = document.getElementById('offlineBanner');
-  if (!banner) return;
-  if (_isOnline) {
-    banner.classList.remove('show');
-  } else {
-    banner.classList.add('show');
-  }
+  // No-op: banner controlled by updateOfflineBannerState() in app.js
+  // which pings the actual server instead of using navigator.onLine
 }
 
 function isOnline() { return _isOnline; }

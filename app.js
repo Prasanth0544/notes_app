@@ -17,19 +17,129 @@ if (typeof deleteNoteOffline === 'undefined') { window.deleteNoteOffline = async
 if (typeof offlineInit === 'undefined') { window.offlineInit = async () => false; }
 if (typeof syncQueue === 'undefined') { window.syncQueue = async () => {}; }
 
+// ─── Browser localStorage Cache (works offline for web) ──────
+const STORAGE_NOTES_LIST = 'nv_cache_notes_list';
+const STORAGE_NOTE_PREFIX = 'nv_cache_note_';
+
+function cacheNotesListToStorage(notes) {
+  try {
+    // Store lightweight list (without full content to save space)
+    const lightweight = notes.map(n => ({
+      id: n.id, title: n.title, tags: n.tags,
+      content: n.content || '',
+      created: n.created, modified: n.modified,
+      updated_at: n.updated_at
+    }));
+    localStorage.setItem(STORAGE_NOTES_LIST, JSON.stringify(lightweight));
+  } catch (e) { console.warn('Cache notes list failed:', e); }
+}
+
+function cacheNoteToStorage(note) {
+  try {
+    localStorage.setItem(STORAGE_NOTE_PREFIX + note.id, JSON.stringify(note));
+  } catch (e) { console.warn('Cache note failed:', e); }
+}
+
+function getNotesListFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_NOTES_LIST);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function getNoteFromStorage(id) {
+  try {
+    const raw = localStorage.getItem(STORAGE_NOTE_PREFIX + id);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function deleteNoteFromStorage(id) {
+  try {
+    localStorage.removeItem(STORAGE_NOTE_PREFIX + id);
+    const list = getNotesListFromStorage().filter(n => n.id !== id);
+    localStorage.setItem(STORAGE_NOTES_LIST, JSON.stringify(list));
+  } catch {}
+}
+
+// Track whether the server is actually reachable (ping-based, not navigator.onLine)
+let _serverReachable = true;
+
+function updateOfflineBannerState() {
+  const banner = document.getElementById('offlineBanner');
+  if (!banner) return;
+  if (_serverReachable) {
+    banner.classList.remove('show');
+  } else {
+    banner.classList.add('show');
+  }
+}
+
+// XHR-based request (bypasses Chrome's offline fetch blocking for localhost)
+function xhrRequest(url, method = 'GET', body = null, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    xhr.timeout = 4000;
+    Object.keys(headers).forEach(k => xhr.setRequestHeader(k, headers[k]));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch { resolve(xhr.responseText); }
+      } else if (xhr.status === 401) {
+        reject(new Error('Unauthorized'));
+      } else {
+        reject(new Error(`XHR ${url} → ${xhr.status}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('XHR network error'));
+    xhr.ontimeout = () => reject(new Error('XHR timeout'));
+    xhr.send(body);
+  });
+}
+
+// Ping the server to check real connectivity (uses XHR, ignores navigator.onLine)
+async function checkServerConnection() {
+  try {
+    const data = await xhrRequest(API + '/health');
+    if (data && data.ok) {
+      _serverReachable = true;
+      updateOfflineBannerState();
+      return true;
+    }
+  } catch {
+    // Server not reachable
+  }
+  _serverReachable = false;
+  updateOfflineBannerState();
+  return false;
+}
+
+// Periodically check connection (every 15s) so banner updates when server comes back
+setInterval(async () => {
+  const wasReachable = _serverReachable;
+  await checkServerConnection();
+  // If server just came back, reload fresh data
+  if (!wasReachable && _serverReachable) {
+    showToast('📶 Server reconnected — refreshing...', 2000);
+    await loadNotesList();
+    if (allNotes.length > 0 && activeId) await openNote(activeId);
+  }
+}, 15000);
+
 // Detect environment for API base URL:
 //  - Capacitor (mobile): runs at https://localhost (no port) → use Render URL
-//  - Local dev: runs at localhost:5000 → use local Flask
+//  - Local dev: runs at localhost:4000 → use local Flask
 //  - Vercel (production web): everything else → use /api proxy
 const isLocalhost = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const isCapacitor = isLocalhost && !window.location.port;    // Capacitor = localhost WITHOUT a port
-const isLocalDev  = isLocalhost && window.location.port === '5000';
+const isLocalDev  = isLocalhost && window.location.port === '4000';
 
 let API;
 if (isCapacitor) {
   API = 'https://notes-app-e06a.onrender.com/api';           // Mobile → Render backend
 } else if (isLocalDev) {
-  API = 'http://localhost:5000/api';                           // Local dev → Flask
+  API = 'http://localhost:4000/api';                           // Local dev → Flask
 } else {
   API = '/api';                                                // Vercel → proxy
 }
@@ -84,20 +194,37 @@ function logout() {
 
 // ─── API helpers ──────────────────────────────────────────────
 async function apiFetch(path, opts = {}) {
-  const res = await fetch(API + path, {
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + getToken(),
-    },
-    ...opts,
-  });
-  if (res.status === 401) {
-    showToast('⚠️ Session expired – please sign in again', 3000);
-    setTimeout(logout, 2500);
-    throw new Error('Unauthorized');
+  const url = API + path;
+  const hdrs = {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + getToken(),
+  };
+
+  let data;
+  try {
+    const res = await fetch(url, { headers: hdrs, ...opts });
+    _serverReachable = true;
+    updateOfflineBannerState();
+    if (res.status === 401) {
+      showToast('⚠️ Session expired – please sign in again', 3000);
+      setTimeout(logout, 2500);
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) throw new Error('API ' + path + ' fail ' + res.status);
+    data = await res.json();
+  } catch (fetchErr) {
+    if (fetchErr.message === 'Unauthorized') throw fetchErr;
+    // fetch() blocked by browser offline mode? Try XHR for localhost
+    if (isLocalDev) {
+      console.log('XHR fallback for: ' + path);
+      data = await xhrRequest(url, opts.method || 'GET', opts.body || null, hdrs);
+      _serverReachable = true;
+      updateOfflineBannerState();
+    } else {
+      throw fetchErr;
+    }
   }
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
-  return res.json();
+  return data;
 }
 
 // ─── User Profile ─────────────────────────────────────────────
@@ -108,12 +235,17 @@ async function loadUserProfile() {
     if (cached.name) applyUserUI(cached);
   } catch {}
 
-  // Always refresh from server
+  // Try to refresh from server (may fail if offline)
   try {
     const user = await apiFetch('/auth/me');
     localStorage.setItem('nv_user', JSON.stringify(user));
     applyUserUI(user);
-  } catch {}
+  } catch (e) {
+    // Server unreachable — just use cached profile, don't crash
+    if (!e.message?.includes('Unauthorized')) {
+      console.warn('Could not refresh user profile — using cached version');
+    }
+  }
 }
 
 function applyUserUI(user) {
@@ -219,31 +351,43 @@ window.addEventListener('beforeunload', e => {
 
 // ─── Render Notes List ────────────────────────────────────────
 async function loadNotesList(q = '') {
+  // Strategy: ALWAYS try API first (works for both local server + Atlas).
+  // Fall back to localStorage cache, then Capacitor SQLite.
   try {
-    if (isOnline()) {
-      const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
-      allNotes = await apiFetch(url);
-      // Cache all notes to SQLite for offline use
-      if (isOfflineReady()) await cacheNotes(allNotes);
-    } else {
-      // Offline: load from SQLite
-      allNotes = await getOfflineNotes();
-      if (q) {
-        const ql = q.toLowerCase();
-        allNotes = allNotes.filter(n => (n.title || '').toLowerCase().includes(ql) || (n.content || '').toLowerCase().includes(ql));
-      }
-    }
+    const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
+    allNotes = await apiFetch(url);
+    // Cache to localStorage for browser offline use
+    cacheNotesListToStorage(allNotes);
+    // Also cache to SQLite for mobile offline use
+    if (isOfflineReady()) await cacheNotes(allNotes);
   } catch(e) {
-    if (!e.message.includes('Unauthorized')) {
-      // Try SQLite fallback
-      if (isOfflineReady()) {
-        allNotes = await getOfflineNotes();
-        showToast('📴 Offline mode — showing cached notes', 3000);
-      } else {
-        showToast('⚠️ Cannot reach server', 4000);
-      }
+    if (e.message?.includes('Unauthorized')) return;
+    // Server unreachable — mark as offline and try caches
+    _serverReachable = false;
+    updateOfflineBannerState();
+
+    // Try localStorage cache first (browser)
+    allNotes = getNotesListFromStorage();
+    if (allNotes.length) {
+      showToast('📴 Offline — showing cached notes', 3000);
+    } else if (isOfflineReady()) {
+      // Fallback to Capacitor SQLite (mobile)
+      allNotes = await getOfflineNotes();
+      if (allNotes.length) showToast('📴 Offline mode — showing cached notes', 3000);
     }
-    if (!allNotes.length) return;
+
+    // Apply local search filter on cached data
+    if (q && allNotes.length) {
+      const ql = q.toLowerCase();
+      allNotes = allNotes.filter(n =>
+        (n.title || '').toLowerCase().includes(ql) ||
+        (n.content || '').toLowerCase().includes(ql)
+      );
+    }
+
+    if (!allNotes.length && !q) {
+      showToast('⚠️ Cannot reach server & no cached notes', 4000);
+    }
   }
 
   notesList.innerHTML = '';
@@ -303,17 +447,17 @@ async function openNote(id) {
     noteTitleInput.value = 'Loading…';
     editorBody.innerHTML = '';
     setSaveStatus('pending');
+
+    // Always try API first
     try {
-      if (isOnline()) {
-        note = await apiFetch(`/notes/${id}`);
-        noteCache.set(id, note);
-        if (isOfflineReady()) await cacheNote(note);
-      } else if (isOfflineReady()) {
-        note = await getOfflineNote(id);
-      }
+      note = await apiFetch(`/notes/${id}`);
+      noteCache.set(id, note);
+      cacheNoteToStorage(note);
+      if (isOfflineReady()) await cacheNote(note);
     } catch {
-      // Fallback to SQLite
-      if (isOfflineReady()) note = await getOfflineNote(id);
+      // API failed — try localStorage cache, then Capacitor SQLite
+      note = getNoteFromStorage(id);
+      if (!note && isOfflineReady()) note = await getOfflineNote(id);
     }
     if (!note) { showToast('⚠️ Cannot load note'); return; }
     if (activeId !== id) return;
@@ -341,24 +485,17 @@ function renderNoteContent(note) {
 async function createNote() {
   if (!await checkUnsaved()) return;
   try {
-    if (isOnline()) {
-      const note = await apiFetch('/notes', {
-        method: 'POST',
-        body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }),
-      });
-      if (isOfflineReady()) await cacheNote(note);
-      await openNote(note.id);
-    } else if (isOfflineReady()) {
-      const note = await saveNoteOffline(null, 'Untitled Note', '', []);
-      noteCache.set(note.id, note);
-      await loadNotesList();
-      await openNote(note.id);
-      showToast('📴 Note created offline — will sync later');
-    } else {
-      showToast('⚠️ No connection');
-      return;
-    }
+    // Always try API first
+    const note = await apiFetch('/notes', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }),
+    });
+    cacheNoteToStorage(note);
+    if (isOfflineReady()) await cacheNote(note);
+    await openNote(note.id);
   } catch(e) {
+    if (e.message?.includes('Unauthorized')) return;
+    // Server unreachable — try Capacitor SQLite offline create
     if (isOfflineReady()) {
       const note = await saveNoteOffline(null, 'Untitled Note', '', []);
       noteCache.set(note.id, note);
@@ -366,7 +503,7 @@ async function createNote() {
       await openNote(note.id);
       showToast('📴 Note created offline — will sync later');
     } else {
-      showToast('⚠️ Cannot create note');
+      showToast('⚠️ Cannot reach server to create note');
       return;
     }
   }
@@ -379,14 +516,13 @@ async function deleteNote() {
   if (!activeId) return;
   if (!confirm('Delete this note? This cannot be undone.')) return;
   noteCache.delete(activeId);
+  deleteNoteFromStorage(activeId);
   try {
-    if (isOnline()) {
-      await apiFetch(`/notes/${activeId}`, { method: 'DELETE' });
-    }
-    if (isOfflineReady()) await deleteNoteOffline(activeId);
+    await apiFetch(`/notes/${activeId}`, { method: 'DELETE' });
   } catch {
-    if (isOfflineReady()) await deleteNoteOffline(activeId);
+    // Server unreachable — already removed from localStorage cache above
   }
+  if (isOfflineReady()) await deleteNoteOffline(activeId);
   activeId = null;
   editorPanel.style.display = 'none';
   emptyState.style.display  = 'flex';
@@ -412,35 +548,36 @@ async function saveCurrentNote() {
     || cached.title !== newTitle
     || JSON.stringify(cached.tags) !== JSON.stringify(newTags);
   try {
-    if (isOnline()) {
-      const updated = await apiFetch(`/notes/${activeId}`, {
-        method: 'PUT',
-        body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
-      });
-      noteCache.set(activeId, updated);
-      noteDate.textContent = 'Last saved: ' + fmtDate(updated.modified);
-      if (isOfflineReady()) await cacheNote(updated);
-      isDirty = false;
-      setSaveStatus('ok');
-    } else if (isOfflineReady()) {
-      await saveNoteOffline(activeId, newTitle, newContent, newTags);
-      isDirty = false;
-      setSaveStatus('ok');
-      noteDate.textContent = 'Saved offline';
-    } else {
-      throw new Error('No connection');
-    }
+    // Always try API first
+    const updated = await apiFetch(`/notes/${activeId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
+    });
+    noteCache.set(activeId, updated);
+    noteDate.textContent = 'Last saved: ' + fmtDate(updated.modified);
+    cacheNoteToStorage(updated);
+    if (isOfflineReady()) await cacheNote(updated);
+    isDirty = false;
+    setSaveStatus('ok');
     if (sidebarChanged) await loadNotesList(searchInput.value);
   } catch(e) {
+    if (e.message?.includes('Unauthorized')) return;
+    // Server unreachable — save to Capacitor SQLite if available
     if (isOfflineReady()) {
       await saveNoteOffline(activeId, newTitle, newContent, newTags);
       isDirty = false;
       setSaveStatus('ok');
       noteDate.textContent = 'Saved offline';
       if (sidebarChanged) await loadNotesList(searchInput.value);
-    } else if (!e.message.includes('Unauthorized')) {
-      setSaveStatus('err');
-      showToast('⚠️ Save failed');
+    } else {
+      // No server, no SQLite — save to localStorage at least
+      const localNote = { id: activeId, title: newTitle, content: newContent, tags: newTags, modified: Date.now() };
+      cacheNoteToStorage(localNote);
+      noteCache.set(activeId, localNote);
+      isDirty = false;
+      setSaveStatus('ok');
+      noteDate.textContent = 'Saved locally (offline)';
+      if (sidebarChanged) await loadNotesList(searchInput.value);
     }
   }
 }
@@ -547,6 +684,13 @@ editorBody.addEventListener('keydown', e => {
 function execCmd(cmd, value = null) {
   editorBody.focus();
   if (['h1','h2','h3'].includes(cmd)) document.execCommand('formatBlock', false, cmd);
+  else if (cmd === 'fontSizePx') {
+    document.execCommand('fontSize', false, '7');
+    document.querySelectorAll('font[size="7"]').forEach(f => {
+      f.removeAttribute('size');
+      f.style.fontSize = value + 'pt';
+    });
+  }
   else if (cmd === 'fontSize')        document.execCommand('fontSize', false, value);
   else if (cmd === 'foreColor')       document.execCommand('foreColor', false, value);
   else                                document.execCommand(cmd, false, value);
@@ -554,7 +698,17 @@ function execCmd(cmd, value = null) {
 document.querySelectorAll('.tb-btn[data-cmd]').forEach(btn => {
   btn.addEventListener('mousedown', e => { e.preventDefault(); execCmd(btn.dataset.cmd); scheduleSave(); });
 });
-$('fontSizeSel').addEventListener('change', e => { execCmd('fontSize', e.target.value); scheduleSave(); });
+const fontSizeInput = $('fontSizeInput');
+if (fontSizeInput) {
+  fontSizeInput.addEventListener('change', e => {
+    let val = parseInt(e.target.value);
+    if (isNaN(val) || val < 1) val = 1;
+    if (val > 30) val = 30;
+    e.target.value = val;
+    execCmd('fontSizePx', val);
+    scheduleSave();
+  });
+}
 $('fontColor').addEventListener('input',    e => { execCmd('foreColor', e.target.value); scheduleSave(); });
 $('btnUndo').addEventListener('click', () => { document.execCommand('undo'); scheduleSave(); });
 $('btnRedo').addEventListener('click', () => { document.execCommand('redo'); scheduleSave(); });
@@ -750,12 +904,16 @@ document.addEventListener('keydown', e => {
     await offlineInit();
   }
 
+  // ── Check if server is actually reachable (ping-based) ──
+  await checkServerConnection();
+  console.log(`🔌 Server reachable: ${_serverReachable}`);
+
   // Load user profile and notes in parallel
   await Promise.all([loadUserProfile(), loadNotesList()]);
   if (allNotes.length > 0) await openNote(allNotes[0].id);
 
   // ── Background prefetch: cache all notes so switching is instant ──
-  if (allNotes.length > 1 && isOnline()) {
+  if (allNotes.length > 1 && _serverReachable) {
     const prefetchIds = allNotes.slice(1).map(n => n.id);
     (async () => {
       for (const pid of prefetchIds) {
@@ -763,6 +921,7 @@ document.addEventListener('keydown', e => {
           try {
             const n = await apiFetch(`/notes/${pid}`);
             noteCache.set(pid, n);
+            cacheNoteToStorage(n);
             if (isOfflineReady()) await cacheNote(n);
           } catch { /* ignore prefetch failures */ }
         }
@@ -770,5 +929,6 @@ document.addEventListener('keydown', e => {
     })();
   }
 
-  showToast(isOnline() ? '📓 NoteVault ready!' : '📴 Offline mode');
+  showToast(_serverReachable ? '📓 NoteVault ready!' : '📴 Offline mode — showing cached notes');
 })();
+

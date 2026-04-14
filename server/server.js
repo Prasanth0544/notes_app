@@ -3,7 +3,7 @@
  * ======================================================
  * Supports: Email/Password, Google OAuth, GitHub OAuth, Phone+Password
  * Run:  node server.js
- * API:  http://localhost:5000
+ * API:  http://localhost:4000
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
@@ -16,7 +16,7 @@ const cloudinary = require('cloudinary').v2;
 
 // ── Environment ─────────────────────────────────────────
 const MONGO_URI = process.env.MONGO_URI;
-const PORT      = parseInt(process.env.PORT || '5000', 10);
+const PORT      = parseInt(process.env.PORT || '4000', 10);
 
 if (!MONGO_URI) {
   console.error('  ⚠️  MONGO_URI not set in .env – cannot start.');
@@ -57,6 +57,9 @@ async function main() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+  // ── Health Check (used by frontend to detect local server) ──
+  app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
   // ── API Routes ──────────────────────────────────────
   app.use('/api/auth',   require('./routes/auth')(db));
   app.use('/api/notes',  require('./routes/notes')(db));
@@ -86,19 +89,19 @@ async function main() {
     console.log('  ╔══════════════════════════════════════════════╗');
     console.log('  ║   NoteVault Server – running!                ║');
     console.log(`  ║   Open: ${url.padEnd(37)}║`);
-    console.log('  ║   Auth: Email · Phone · Google · GitHub     ║');
-    console.log('  ║   DB:   MongoDB Atlas (notevault)           ║');
-    console.log('  ║   Stack: Node.js + Express                  ║');
+    console.log('  ║   Auth: Email · Phone · Google · GitHub      ║');
+    console.log('  ║   DB:   MongoDB Atlas (notevault)            ║');
+    console.log('  ║   Stack: Node.js + Express                   ║');
     console.log('  ╚══════════════════════════════════════════════╝');
     console.log();
 
     // Auto-open browser (skip on Render/production)
-    if (!process.env.RENDER) {
-      const { exec } = require('child_process');
-      const cmd = process.platform === 'win32' ? `start ${url}` :
-                  process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
-      exec(cmd);
-    }
+    // if (!process.env.RENDER) {
+    //   const { exec } = require('child_process');
+    //   const cmd = process.platform === 'win32' ? `start ${url}` :
+    //               process.platform === 'darwin' ? `open ${url}` : `xdg-open ${url}`;
+    //   exec(cmd);
+    // }
   });
 }
 
@@ -106,3 +109,4 @@ main().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+

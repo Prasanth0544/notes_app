@@ -30,18 +30,48 @@ export default function NotesApp() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showOfflineBanner, setShowOfflineBanner] = useState(!navigator.onLine);
+  const [zoomLevel, setZoomLevel] = useState(100);
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [findText, setFindText] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+  const [lineSpacing, setLineSpacing] = useState('1.75');
+  const [docStats, setDocStats] = useState({ words: 0, chars: 0, sentences: 0, paragraphs: 0, readTime: '0 min' });
+  const [directFontSize, setDirectFontSize] = useState('16');
+  const [wordSpacing, setWordSpacing] = useState('normal');
+  // Normal/Custom toggle states
+  const [sizeMode, setSizeMode] = useState('normal');
+  const [markMode, setMarkMode] = useState('normal');
+  const [textColorMode, setTextColorMode] = useState('normal');
+  const [lineSpaceMode, setLineSpaceMode] = useState('normal');
+  const [wordSpaceMode, setWordSpaceMode] = useState('normal');
+  const [customMarkColor, setCustomMarkColor] = useState('#ffff00');
+  const [customTextColor, setCustomTextColor] = useState('#e2e8f0');
 
   const activeIdRef = useRef(null);
   const isDirtyRef = useRef(false);
   const currentTagsRef = useRef([]);
   const titleRef = useRef('');
   const modalResolveRef = useRef(null);
+  const savedRangeRef = useRef(null);
+  const directFontSizeRef = useRef('16');
 
   // Keep refs in sync with state
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
   useEffect(() => { currentTagsRef.current = currentTags; }, [currentTags]);
+  useEffect(() => { directFontSizeRef.current = directFontSize; }, [directFontSize]);
   useEffect(() => { titleRef.current = noteTitle; }, [noteTitle]);
+
+  useEffect(() => {
+    function handleSelection() {
+      const sel = window.getSelection();
+      if (sel.rangeCount > 0 && editorRef.current && editorRef.current.contains(sel.anchorNode)) {
+        savedRangeRef.current = sel.getRangeAt(0);
+      }
+    }
+    document.addEventListener('selectionchange', handleSelection);
+    return () => document.removeEventListener('selectionchange', handleSelection);
+  }, []);
 
   // ─── Helpers ───────────────────────────────────────
   function getToken() { return localStorage.getItem('nv_token'); }
@@ -70,7 +100,16 @@ export default function NotesApp() {
       setTimeout(() => { localStorage.removeItem('nv_token'); localStorage.removeItem('nv_user'); navigate('/login'); }, 2500);
       throw new Error('Unauthorized');
     }
-    if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
+    if (!res.ok) {
+      let errorMsg = `API ${path} → ${res.status}`;
+      try {
+        const errorData = await res.json();
+        if (errorData.error) errorMsg = errorData.error;
+      } catch {}
+      const error = new Error(errorMsg);
+      error.status = res.status;
+      throw error;
+    }
     return res.json();
   }
 
@@ -231,15 +270,25 @@ export default function NotesApp() {
 
     try {
       if (navigator.onLine) {
-        const updated = await apiFetch(`/notes/${id}`, {
-          method: 'PUT',
-          body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
-        });
-        noteCacheRef.current.set(id, updated);
-        setNoteDate('Last saved: ' + fmtDate(updated.modified));
-        cacheNote(updated).catch(() => {});
-        setIsDirty(false);
-        setSaveStatus('ok');
+        try {
+          const updated = await apiFetch(`/notes/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
+          });
+          noteCacheRef.current.set(id, updated);
+          setNoteDate('Last saved: ' + fmtDate(updated.modified));
+          cacheNote(updated).catch(() => {});
+          setIsDirty(false);
+          setSaveStatus('ok');
+        } catch (apiError) {
+          // Check if it's a duplicate name error (409 Conflict)
+          if (apiError.status === 409 || apiError.message?.includes('already exists')) {
+            showToastMsg('⚠️ ' + apiError.message);
+            setSaveStatus('err');
+            return;
+          }
+          throw apiError;
+        }
       } else {
         await saveNoteOffline(id, newTitle, newContent, newTags);
         setIsDirty(false);
@@ -283,17 +332,157 @@ export default function NotesApp() {
     if (modalResolveRef.current) modalResolveRef.current(choice);
   }
 
-  // ─── Word Count ────────────────────────────────────
+  // ─── Word Count & Statistics ───────────────────
   function updateWordCount() {
     if (!editorRef.current) return;
     const text = (editorRef.current.innerText || '').trim();
     const words = text ? text.split(/\s+/).length : 0;
-    setWordCount(`${words} word${words !== 1 ? 's' : ''} · ${text.length} chars`);
+    const chars = text.length;
+    const sentences = text ? (text.match(/[.!?]+/g) || []).length : 0;
+    const paragraphs = text ? (editorRef.current.innerHTML.match(/<p[^>]*><|<div[^>]*></g) || []).length : 0;
+    const readTime = Math.max(1, Math.round(words / 200)); // avg 200 words per minute
+    setWordCount(`${words} word${words !== 1 ? 's' : ''} · ${chars} chars`);
+    setDocStats({ words, chars, sentences: Math.max(0, sentences), paragraphs: Math.max(1, paragraphs), readTime: `${readTime} min` });
+  }
+
+  // ─── Find & Replace ───────────────────────────────
+  function findAndHighlight(text) {
+    if (!text) return;
+    const body = editorRef.current;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+    let node;
+    const matches = [];
+    while (node = walker.nextNode()) {
+      const idx = node.textContent.toLowerCase().indexOf(text.toLowerCase());
+      if (idx !== -1) matches.push({ node, idx });
+    }
+    matches.forEach(m => {
+      const span = document.createElement('mark');
+      span.style.backgroundColor = 'rgba(255,193,7,.6)';
+      const match = m.node.splitText(m.idx);
+      match.splitText(text.length);
+      span.appendChild(match.cloneNode(true));
+      match.parentNode.replaceChild(span, match);
+    });
+  }
+
+  function findAndReplace(findStr, replaceStr, all = true) {
+    if (!findStr) return;
+    const body = editorRef.current;
+    const html = body.innerHTML;
+    let newHtml;
+    if (all) newHtml = html.replaceAll(findStr, replaceStr);
+    else newHtml = html.replace(findStr, replaceStr);
+    body.innerHTML = newHtml;
+    scheduleSave();
+    showToastMsg(`✅ Replaced ${all ? 'all' : '1'} occurrence(s)`);
+  }
+
+  // ─── Line Spacing ────────────────────────────────
+  function setSelectedLineSpacing(spacing) {
+    setLineSpacing(spacing);
+    if (editorRef.current) editorRef.current.style.lineHeight = spacing;
+  }
+
+  // ─── Word Spacing ────────────────────────────────
+  function setSelectedWordSpacing(spacing) {
+    setWordSpacing(spacing);
+    if (editorRef.current) editorRef.current.style.wordSpacing = spacing === 'normal' ? 'normal' : spacing + 'px';
+  }
+
+  // ─── Insert Table ──────────────────────────────────
+  function insertTable() {
+    const rows = prompt('Number of rows:', '3');
+    const cols = prompt('Number of columns:', '3');
+    if (!rows || !cols) return;
+    const r = parseInt(rows); const c = parseInt(cols);
+    if (r < 1 || c < 1 || r > 50 || c > 50) { showToastMsg('⚠️ Invalid table size'); return; }
+    
+    let tableHtml = '<table style="border-collapse:collapse;width:100%;margin:12px 0;"><tbody>';
+    for (let i = 0; i < r; i++) {
+      tableHtml += '<tr>';
+      for (let j = 0; j < c; j++) {
+        tableHtml += `<td style="border:1px solid var(--border);padding:8px;text-align:left;">Cell</td>`;
+      }
+      tableHtml += '</tr>';
+    }
+    tableHtml += '</tbody></table><p><br></p>';
+    
+    document.execCommand('insertHTML', false, tableHtml);
+    scheduleSave();
+    showToastMsg('📊 Table inserted');
+  }
+
+  // ─── Advanced Text Formatting ─────────────────────
+  function toggleHighlight(color) {
+    const c = color || '#00ff00';
+    document.execCommand('backColor', false, c);
+    scheduleSave();
+  }
+
+  function applySuperscript() {
+    document.execCommand('superscript');
+    scheduleSave();
+  }
+
+  function applySubscript() {
+    document.execCommand('subscript');
+    scheduleSave();
+  }
+
+  function insertHorizontalRule() {
+    document.execCommand('insertHorizontalRule');
+    scheduleSave();
+  }
+
+  function insertCode() {
+    const code = prompt('Enter code:');
+    if (code) {
+      document.execCommand('insertHTML', false, `<code style="background:var(--pre-bg);padding:2px 6px;border-radius:4px;font-family:monospace;font-size:0.9em;">${code}</code>`);
+      scheduleSave();
+    }
+  }
+
+  // ─── Print Document ────────────────────────────────
+  function printDocument() {
+    const title = titleRef.current || 'Untitled Note';
+    const content = editorRef.current?.innerHTML || '';
+    const printWindow = window.open('', '', 'width=800,height=600');
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>${title}</title>
+        <style>
+          body { font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #1a1a2e; line-height: 1.75; }
+          h1 { border-bottom: 2px solid #6c63ff; padding-bottom: 10px; margin-bottom: 20px; }
+          table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+          th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+          th { background: #f0f0f0; font-weight: bold; }
+          img { max-width: 100%; margin: 12px 0; }
+          code { background: #f5f5f5; padding: 2px 6px; border-radius: 4px; }
+          .print-date { color: #999; font-size: 0.9em; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; }
+        </style>
+      </head>
+      <body>
+        <h1>${title}</h1>
+        ${content}
+        <div class="print-date">Printed from NoteVault on ${new Date().toLocaleString()}</div>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+    setTimeout(() => printWindow.print(), 250);
   }
 
   // ─── Toolbar ───────────────────────────────────────
   function execCmd(cmd, value = null) {
-    editorRef.current?.focus();
+    editorRef.current?.focus({ preventScroll: true });
+    if (savedRangeRef.current) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    }
     if (['h1', 'h2', 'h3'].includes(cmd)) document.execCommand('formatBlock', false, cmd);
     else if (cmd === 'fontSize') document.execCommand('fontSize', false, value);
     else if (cmd === 'foreColor') document.execCommand('foreColor', false, value);
@@ -326,7 +515,7 @@ export default function NotesApp() {
         method: 'POST', headers: { Authorization: 'Bearer ' + getToken() }, body: fd,
       });
       const data = await res.json();
-      editorRef.current?.focus();
+      editorRef.current?.focus({ preventScroll: true });
       const img = document.createElement('img');
       img.src = data.url; img.alt = data.name;
       const sel = window.getSelection();
@@ -381,17 +570,101 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     showToastMsg('📥 Note downloaded as HTML');
   }
 
+  // ─── Zoom Controls ────────────────────────────────
+  function increaseZoom() {
+    const newZoom = Math.min(zoomLevel + 10, 200);
+    setZoomLevel(newZoom);
+    if (editorRef.current) editorRef.current.style.fontSize = (newZoom / 100) * 16 + 'px';
+  }
+  function decreaseZoom() {
+    const newZoom = Math.max(zoomLevel - 10, 50);
+    setZoomLevel(newZoom);
+    if (editorRef.current) editorRef.current.style.fontSize = (newZoom / 100) * 16 + 'px';
+  }
+  function resetZoom() {
+    setZoomLevel(100);
+    if (editorRef.current) editorRef.current.style.fontSize = '16px';
+  }
+
+  // ─── Selected Text Size Increaser ───────────────
+  function increaseSelectedTextSize() {
+    const selection = window.getSelection();
+    if (!selection.toString()) { showToastMsg('⚠️ Select text first'); return; }
+    editorRef.current?.focus({ preventScroll: true });
+    const sizes = ['1', '2', '3', '4', '5', '6', '7'];
+    const currentSize = document.queryCommandValue('fontSize');
+    let currentIdx = sizes.indexOf(currentSize);
+    if (currentIdx === -1) currentIdx = 2; // default to Normal if unknown
+    const nextIdx = Math.min(currentIdx + 1, sizes.length - 1);
+    document.execCommand('fontSize', false, sizes[nextIdx]);
+    scheduleSave();
+    showToastMsg(`📏 Text size increased`);
+  }
+  function decreaseSelectedTextSize() {
+    const selection = window.getSelection();
+    if (!selection.toString()) { showToastMsg('⚠️ Select text first'); return; }
+    editorRef.current?.focus({ preventScroll: true });
+    const sizes = ['1', '2', '3', '4', '5', '6', '7'];
+    const currentSize = document.queryCommandValue('fontSize');
+    let currentIdx = sizes.indexOf(currentSize);
+    if (currentIdx === -1) currentIdx = 2; // default to Normal if unknown
+    const prevIdx = Math.max(currentIdx - 1, 0);
+    document.execCommand('fontSize', false, sizes[prevIdx]);
+    scheduleSave();
+  }
+
+  // ─── Direct Font Size Input ──────────────────────
+  function setDirectTextSize(value) {
+    const size = parseInt(value);
+    if (isNaN(size) || size < 1 || size > 30) {
+      showToastMsg('⚠️ Enter number 1-30');
+      return;
+    }
+    
+    // Make sure we select the editor
+    editorRef.current?.focus({ preventScroll: true });
+    
+    // Restore the exact caret position/selection we had before clicking the input box
+    if (savedRangeRef.current) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    }
+
+    // Freeze all PREVIOUSLY set 7 tags so they don't get overwritten
+    document.querySelectorAll('font[size="7"]').forEach(f => { f.dataset.old = "1"; });
+
+    // Tell the browser natively to switch to size 7 for the selection OR for the current caret
+    // This allows Chrome to completely handle splitting nested DOM elements when you change sizes mid-paragraph!
+    document.execCommand('fontSize', false, '7');
+    
+    // If text was selected, and Chrome wrapped it instantly, update it immediately:
+    document.querySelectorAll('font[size="7"]:not([data-old="1"])').forEach(f => {
+      f.style.fontSize = size + 'pt';
+    });
+
+    setDirectFontSize(String(size));
+    scheduleSave();
+    showToastMsg(`📏 Text size set to ${size}`);
+  }
+
   // ─── Keyboard Shortcuts ────────────────────────────
   useEffect(() => {
     function handleKeyDown(e) {
       const ctrl = e.ctrlKey || e.metaKey;
       if (ctrl && e.key === 's') { e.preventDefault(); saveCurrentNote(); }
       if (ctrl && e.key === 'n') { e.preventDefault(); createNote(); }
-      if (ctrl && e.key === 'f') { e.preventDefault(); document.getElementById('searchInput')?.focus(); }
+      if (ctrl && e.key === 'f') { e.preventDefault(); setShowFindReplace(true); }
+      if (ctrl && e.shiftKey && e.key === 'H') { e.preventDefault(); setShowFindReplace(true); }
+      if (ctrl && e.key === '+' || ctrl && e.key === '=') { e.preventDefault(); increaseZoom(); }
+      if (ctrl && e.key === '-') { e.preventDefault(); decreaseZoom(); }
+      if (ctrl && e.key === '0') { e.preventDefault(); resetZoom(); }
+      if (ctrl && e.key === 'p') { e.preventDefault(); printDocument(); }
+      if (e.key === 'Escape' && showFindReplace) { setShowFindReplace(false); }
     }
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [saveCurrentNote]);
+  }, [saveCurrentNote, zoomLevel, showFindReplace]);
 
   // ─── Beforeunload ──────────────────────────────────
   useEffect(() => {
@@ -560,6 +833,26 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
               <span className="tb-divider" />
 
+              <button className="tb-btn" title="Superscript" onMouseDown={e => { e.preventDefault(); applySuperscript(); }}>x<sup>²</sup></button>
+              <button className="tb-btn" title="Subscript" onMouseDown={e => { e.preventDefault(); applySubscript(); }}>x<sub>₂</sub></button>
+
+              {/* ── Mark (Highlight) : Normal=Green / Custom=Color Picker ── */}
+              <select className="tb-select" title="Highlight mode" value={markMode}
+                style={{ width: '80px' }}
+                onChange={e => {
+                  setMarkMode(e.target.value);
+                  if (e.target.value === 'normal') toggleHighlight('#00ff00');
+                }}>
+                <option value="normal">🖍️ Mark</option>
+                <option value="custom">Custom</option>
+              </select>
+              {markMode === 'custom' && (
+                <input type="color" className="tb-color" title="Pick highlight color" value={customMarkColor}
+                  onInput={e => { setCustomMarkColor(e.target.value); toggleHighlight(e.target.value); }} />
+              )}
+
+              <span className="tb-divider" />
+
               <button className="tb-btn" title="Bullet list" onMouseDown={e => { e.preventDefault(); execCmd('insertUnorderedList'); }}>≡ •</button>
               <button className="tb-btn" title="Numbered list" onMouseDown={e => { e.preventDefault(); execCmd('insertOrderedList'); }}>≡ 1</button>
 
@@ -569,22 +862,90 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 <button key={h} className="tb-btn" title={`Heading ${h[1]}`} onMouseDown={e => { e.preventDefault(); execCmd(h); }}>{h.toUpperCase()}</button>
               ))}
 
-              <span className="tb-divider" />
-
-              <select className="tb-select" title="Font size" defaultValue="3"
-                onChange={e => execCmd('fontSize', e.target.value)}>
-                <option value="1">Tiny</option><option value="2">Small</option>
-                <option value="3">Normal</option><option value="4">Large</option>
-                <option value="5">XL</option><option value="6">XXL</option>
+              {/* ── Text Size : Normal=default / Custom=number input ── */}
+              <select className="tb-select" title="Text size mode" value={sizeMode}
+                style={{ width: '80px' }}
+                onChange={e => {
+                  setSizeMode(e.target.value);
+                  if (e.target.value === 'normal') { setDirectFontSize('3'); execCmd('fontSize', '3'); }
+                }}>
+                <option value="normal">Size ⓝ</option>
+                <option value="custom">Custom</option>
               </select>
-              <input type="color" className="tb-color" title="Text color" defaultValue="#e2e8f0"
-                onInput={e => execCmd('foreColor', e.target.value)} />
+              {sizeMode === 'custom' && (
+                <input type="number" className="tb-select" min="1" max="30" 
+                  title="Font size (1-30)" placeholder="12" style={{ width: '50px', height: '28px' }}
+                  value={directFontSize} 
+                  onChange={e => setDirectFontSize(e.target.value)}
+                  onKeyDown={e => { 
+                    if (e.key === 'Enter') { 
+                      e.preventDefault(); 
+                      setDirectTextSize(directFontSize); 
+                    } 
+                  }}
+                  onBlur={() => setDirectTextSize(directFontSize)}
+                />
+              )}
+
+              {/* ── Text Color : Normal=default / Custom=Color Picker ── */}
+              <select className="tb-select" title="Text color mode" value={textColorMode}
+                style={{ width: '80px' }}
+                onChange={e => {
+                  setTextColorMode(e.target.value);
+                  if (e.target.value === 'normal') execCmd('foreColor', '#e2e8f0');
+                }}>
+                <option value="normal">Color ⓝ</option>
+                <option value="custom">Custom</option>
+              </select>
+              {textColorMode === 'custom' && (
+                <input type="color" className="tb-color" title="Pick text color" value={customTextColor}
+                  onInput={e => { setCustomTextColor(e.target.value); execCmd('foreColor', e.target.value); }} />
+              )}
 
               <span className="tb-divider" />
 
               <button className="tb-btn" title="Align left" onMouseDown={e => { e.preventDefault(); execCmd('justifyLeft'); }}>⬅</button>
               <button className="tb-btn" title="Align center" onMouseDown={e => { e.preventDefault(); execCmd('justifyCenter'); }}>↔</button>
               <button className="tb-btn" title="Align right" onMouseDown={e => { e.preventDefault(); execCmd('justifyRight'); }}>➡</button>
+              <button className="tb-btn" title="Align justify" onMouseDown={e => { e.preventDefault(); execCmd('justifyFull'); }}>⇔</button>
+
+              <span className="tb-divider" />
+
+              {/* ── Line Spacing : Normal=1.75 / Custom=input ── */}
+              <select className="tb-select" title="Line spacing mode" value={lineSpaceMode}
+                style={{ width: '90px' }}
+                onChange={e => {
+                  setLineSpaceMode(e.target.value);
+                  if (e.target.value === 'normal') setSelectedLineSpacing('1.75');
+                }}>
+                <option value="normal">Line ⓝ</option>
+                <option value="custom">Custom</option>
+              </select>
+              {lineSpaceMode === 'custom' && (
+                <input type="number" className="tb-select" min="0.5" max="5" step="0.25"
+                  title="Line spacing" placeholder="1.75" style={{ width: '55px', height: '28px' }}
+                  value={lineSpacing}
+                  onChange={e => setSelectedLineSpacing(e.target.value)}
+                />
+              )}
+
+              {/* ── Word Spacing : Normal / Custom=input ── */}
+              <select className="tb-select" title="Word spacing mode" value={wordSpaceMode}
+                style={{ width: '90px' }}
+                onChange={e => {
+                  setWordSpaceMode(e.target.value);
+                  if (e.target.value === 'normal') setSelectedWordSpacing('normal');
+                }}>
+                <option value="normal">Word ⓝ</option>
+                <option value="custom">Custom</option>
+              </select>
+              {wordSpaceMode === 'custom' && (
+                <input type="number" className="tb-select" min="0" max="50" step="1"
+                  title="Word spacing (px)" placeholder="0" style={{ width: '50px', height: '28px' }}
+                  value={wordSpacing === 'normal' ? '' : wordSpacing}
+                  onChange={e => setSelectedWordSpacing(e.target.value || 'normal')}
+                />
+              )}
 
               <span className="tb-divider" />
 
@@ -593,7 +954,27 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 const url = prompt('Enter URL:', 'https://');
                 if (url) { execCmd('createLink', url); }
               }}>🔗 Link</button>
+              <button className="tb-btn" title="Insert table" onClick={insertTable}>📊 Table</button>
+              <button className="tb-btn" title="Insert code" onClick={insertCode}>{'</>'} Code</button>
+              <button className="tb-btn" title="Horizontal rule" onMouseDown={e => { e.preventDefault(); insertHorizontalRule(); }}>─ Line</button>
               <button className="tb-btn" title="Clear formatting" onMouseDown={e => { e.preventDefault(); execCmd('removeFormat'); }}>✕ Format</button>
+
+              <span className="tb-divider" />
+
+              <button className="tb-btn" title="Increase selected text size" onClick={increaseSelectedTextSize}>📏 ↑</button>
+              <button className="tb-btn" title="Decrease selected text size" onClick={decreaseSelectedTextSize}>📏 ↓</button>
+
+              <span className="tb-divider" />
+
+              <button className="tb-btn" title="Zoom in (Ctrl++)" onClick={increaseZoom}>🔍 +</button>
+              <button className="tb-btn" title="Zoom out (Ctrl+-)" onClick={decreaseZoom}>🔍 -</button>
+              <button className="tb-btn" title="Reset zoom (Ctrl+0)" onClick={resetZoom}>🔍 {zoomLevel}%</button>
+
+              <span className="tb-divider" />
+
+              <button className="tb-btn" title="Find & Replace (Ctrl+H)" onClick={() => setShowFindReplace(!showFindReplace)}>🔍 Find</button>
+              <button className="tb-btn" title="Print document (Ctrl+P)" onClick={printDocument}>🖨️ Print</button>
+              <button className="tb-btn" title="Document stats" onClick={() => showToastMsg(`📊 Words: ${docStats.words} | Chars: ${docStats.chars} | Sentences: ${docStats.sentences} | Paragraphs: ${docStats.paragraphs} | Reading time: ${docStats.readTime}`, 4000)}>📈 Stats</button>
 
               <span className="tb-divider" />
 
@@ -609,7 +990,42 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
             {/* Editor body */}
             <div className="editor-body" ref={editorRef} contentEditable suppressContentEditableWarning
               spellCheck data-placeholder="Start writing… paste text and images freely 🚀"
-              onInput={() => { updateWordCount(); ensureTrailingParagraph(); scheduleSave(); }}
+              onClick={e => {
+                const el = editorRef.current;
+                if (!el) return;
+                // Get the last child element's bottom position
+                const lastChild = el.lastElementChild || el.lastChild;
+                const clickY = e.clientY;
+                const editorRect = el.getBoundingClientRect();
+                const contentBottom = lastChild 
+                  ? lastChild.getBoundingClientRect().bottom 
+                  : editorRect.top;
+                // If clicked below all content, add empty lines to fill to that point
+                if (clickY > contentBottom + 5) {
+                  const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 24;
+                  const linesNeeded = Math.max(1, Math.ceil((clickY - contentBottom) / lineHeight));
+                  for (let i = 0; i < linesNeeded; i++) {
+                    const p = document.createElement('p');
+                    p.innerHTML = '<br>';
+                    el.appendChild(p);
+                  }
+                  // Place cursor in the last added paragraph
+                  const lastP = el.lastElementChild;
+                  const range = document.createRange();
+                  range.setStart(lastP, 0);
+                  range.collapse(true);
+                  const sel = window.getSelection();
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                  scheduleSave();
+                }
+              }}
+              onInput={() => {
+                document.querySelectorAll('font[size="7"]:not([data-old="1"])').forEach(f => {
+                  if (directFontSizeRef.current) f.style.fontSize = directFontSizeRef.current + 'pt';
+                });
+                updateWordCount(); ensureTrailingParagraph(); scheduleSave(); 
+              }}
               onPaste={e => {
                 const items = e.clipboardData?.items;
                 if (!items) return;
@@ -678,6 +1094,31 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
       {/* Toast */}
       <div className={`toast ${toast.show ? 'show' : ''}`}>{toast.msg}</div>
+
+      {/* Find & Replace Modal */}
+      {showFindReplace && (
+        <div className="find-replace-panel">
+          <div className="find-replace-header">
+            <h3>🔍 Find & Replace</h3>
+            <button className="close-btn" onClick={() => setShowFindReplace(false)}>✕</button>
+          </div>
+          <div className="find-replace-body">
+            <div className="find-group">
+              <label>Find:</label>
+              <input type="text" placeholder="Search text…" value={findText} onChange={e => setFindText(e.target.value)} autoFocus />
+              <button className="find-btn" onClick={() => findAndHighlight(findText)}>Highlight</button>
+            </div>
+            <div className="replace-group">
+              <label>Replace:</label>
+              <input type="text" placeholder="Replace with…" value={replaceText} onChange={e => setReplaceText(e.target.value)} />
+              <div className="replace-buttons">
+                <button className="replace-btn single" onClick={() => findAndReplace(findText, replaceText, false)}>Replace</button>
+                <button className="replace-btn all" onClick={() => findAndReplace(findText, replaceText, true)}>Replace All</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

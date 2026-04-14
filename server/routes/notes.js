@@ -53,10 +53,35 @@ module.exports = function (db) {
   // ── Create note ────────────────────────────────────
   router.post('/', authMiddleware, async (req, res) => {
     try {
+      let title = req.body.title || 'Untitled Note';
+      
+      // Generate sequential untitled names
+      if (title === 'Untitled Note' || title === 'Untitled') {
+        let nextNum = 1;
+        let isUnique = false;
+        
+        while (!isUnique) {
+          const candidateTitle = `Untitled ${nextNum}`;
+          const existing = await notes.findOne({ user_id: req.userId, title: candidateTitle });
+          if (!existing) {
+            title = candidateTitle;
+            isUnique = true;
+          } else {
+            nextNum++;
+          }
+        }
+      } else {
+        // Check for duplicate title only for non-untitled notes
+        const existing = await notes.findOne({ user_id: req.userId, title: title });
+        if (existing) {
+          return res.status(409).json({ error: `Chat name "${title}" already exists` });
+        }
+      }
+      
       const ts = nowMs();
       const doc = {
         user_id:  req.userId,
-        title:    req.body.title || 'Untitled Note',
+        title:    title,
         content:  req.body.content || '',
         tags:     req.body.tags || [],
         created:  ts,
@@ -74,11 +99,20 @@ module.exports = function (db) {
   // ── Update note ────────────────────────────────────
   router.put('/:id', authMiddleware, async (req, res) => {
     try {
+      const title = req.body.title || 'Untitled Note';
+      const noteId = new ObjectId(req.params.id);
+      
+      // Check for duplicate title (but allow same note to keep its title)
+      const existing = await notes.findOne({ user_id: req.userId, title: title, _id: { $ne: noteId } });
+      if (existing) {
+        return res.status(409).json({ error: `Chat name "${title}" already exists` });
+      }
+      
       const ts = nowMs();
       const result = await notes.findOneAndUpdate(
-        { _id: new ObjectId(req.params.id), user_id: req.userId },
+        { _id: noteId, user_id: req.userId },
         { $set: {
-          title:    req.body.title || 'Untitled Note',
+          title:    title,
           content:  req.body.content || '',
           tags:     req.body.tags || [],
           modified: ts,

@@ -142,7 +142,7 @@ module.exports = function (db) {
 
   const GOOGLE_CLIENT_ID  = process.env.GOOGLE_CLIENT_ID || '';
   const GOOGLE_CLIENT_SEC = process.env.GOOGLE_CLIENT_SECRET || '';
-  const APP_URL           = process.env.APP_URL || 'http://localhost:5000';
+  const APP_URL           = process.env.APP_URL || 'http://localhost:4000';
 
   router.get('/google', (req, res) => {
     if (!GOOGLE_CLIENT_ID) return res.status(501).json({ error: 'Google OAuth not configured' });
@@ -318,3 +318,4 @@ async function findOrCreateOAuthUser(users, email, name, avatar, provider, oauth
   doc._id = result.insertedId;
   return { user: doc, isNew: true };
 }
+

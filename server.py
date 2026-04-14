@@ -3,7 +3,7 @@ NoteVault – Flask + MongoDB Atlas + JWT Auth Backend
 =====================================================
 Supports: Email/Password, Google OAuth, GitHub OAuth, Phone+Password
 Run:  python server.py
-API:  http://localhost:5000
+API:  http://localhost:4000
 """
 
 import os
@@ -34,8 +34,8 @@ GOOGLE_CLIENT_ID  = os.getenv('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SEC = os.getenv('GOOGLE_CLIENT_SECRET', '')
 GITHUB_CLIENT_ID  = os.getenv('GITHUB_CLIENT_ID', '')
 GITHUB_CLIENT_SEC = os.getenv('GITHUB_CLIENT_SECRET', '')
-APP_URL           = os.getenv('APP_URL', 'http://localhost:5000')
-PORT              = int(os.getenv('PORT', '5000'))
+APP_URL           = os.getenv('APP_URL', 'http://localhost:4000')
+PORT              = int(os.getenv('PORT', '4000'))
 ALLOWED_ORIGINS   = os.getenv('ALLOWED_ORIGINS', '*')  # comma-separated in prod
 
 # Cloudinary
@@ -645,8 +645,9 @@ if __name__ == '__main__':
     print('  ╔══════════════════════════════════════════════╗')
     print('  ║   NoteVault Server – running!                ║')
     print(f'  ║   Open: http://localhost:{PORT:<19}║')
-    print('  ║   Auth: Email · Phone · Google · GitHub     ║')
-    print('  ║   DB:   MongoDB Atlas (notevault)           ║')
+    print('  ║   Auth: Email · Phone · Google · GitHub      ║')
+    print('  ║   DB:   MongoDB Atlas (notevault)            ║')
     print('  ╚══════════════════════════════════════════════╝')
     print()
     app.run(host='0.0.0.0', port=PORT, debug=False)
+
