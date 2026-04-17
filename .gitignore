@@ -1,15 +1,7 @@
 # Secrets & local data
 .env
-notes.db
 images/
 Notes/
-
-# Python (legacy – can remove after migration)
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
 
 # Node
 node_modules/
@@ -21,12 +13,6 @@ client/dist/
 # Capacitor / Mobile
 mobile/
 
-# Old migration/deployment scripts
-migrate_sqlite_to_atlas.py
-deploy_oci.sh
-DEPLOYMENT_PLAN.md
-OCI_DEPLOYMENT_GUIDE.md
-
 # IDE
 .idea/
 .vscode/
@@ -36,6 +22,6 @@ OCI_DEPLOYMENT_GUIDE.md
 Thumbs.db
 .DS_Store
 
-# Other
+# Scripts (local only)
 Start_NoteVault.bat
 notes_stop.bat

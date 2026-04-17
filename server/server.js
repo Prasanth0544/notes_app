@@ -66,21 +66,20 @@ async function main() {
   app.use('/api/images', require('./routes/images')());
   app.use('/api/sync',   require('./routes/sync')(db));
 
-  // ── Serve Frontend (React build or static files) ────
-  // In production, Vite builds to ../client/dist
+  // ── Serve Frontend (React build) ─────────────────────
   const clientDist = path.join(__dirname, '..', 'client', 'dist');
-  const staticDir  = path.join(__dirname, '..');
-
-  // Try React build first, fall back to root static files
   const fs = require('fs');
-  const servePath = fs.existsSync(path.join(clientDist, 'index.html')) ? clientDist : staticDir;
 
-  app.use(express.static(servePath));
-
-  // SPA fallback
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(servePath, 'index.html'));
-  });
+  if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+    app.use(express.static(clientDist));
+    // SPA fallback
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(clientDist, 'index.html'));
+    });
+  } else {
+    console.warn('  ⚠️  client/dist not found — run: cd client && npm run build');
+    app.get('*', (req, res) => res.status(503).json({ error: 'Frontend not built. Run: cd client && npm run build' }));
+  }
 
   // ── Start Server ────────────────────────────────────
   app.listen(PORT, '0.0.0.0', () => {

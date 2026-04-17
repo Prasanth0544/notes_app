@@ -23,7 +23,7 @@ export default function NotesApp() {
   const [wordCount, setWordCount] = useState('0 words · 0 chars');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState({ msg: '', show: false });
-  const [isLight, setIsLight] = useState(localStorage.getItem('nv_theme') === 'light');
+  const [isLight, setIsLight] = useState(localStorage.getItem('nv_theme') !== 'dark');
   const [showModal, setShowModal] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [user, setUser] = useState({});

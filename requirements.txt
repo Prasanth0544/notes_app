@@ -1,9 +1,0 @@
-flask
-flask-cors
-flask-jwt-extended
-pymongo[srv]
-bcrypt
-python-dotenv
-requests
-gunicorn
-cloudinary
