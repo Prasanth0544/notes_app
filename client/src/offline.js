@@ -84,7 +84,7 @@ export async function deleteNoteOffline(noteId) {
 
 // ─── Sync queue processing ────────────────────────────
 export async function syncQueue(apiBase, token) {
-  if (!navigator.onLine) return;
+  // No navigator.onLine gate — caller handles reachability
   const db = await getDb();
   const items = await db.getAll('sync_queue');
   if (!items.length) return;

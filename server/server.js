@@ -90,7 +90,7 @@ async function main() {
     console.log('  ║   NoteVault Server – running!                ║');
     console.log(`  ║   Open: ${url.padEnd(37)}║`);
     console.log('  ║   Auth: Email · Phone · Google · GitHub      ║');
-    console.log('  ║   DB:   MongoDB Atlas (notevault)            ║');
+    console.log('  ║   DB:   MongoDB Atlas                        ║');
     console.log('  ║   Stack: Node.js + Express                   ║');
     console.log('  ╚══════════════════════════════════════════════╝');
     console.log();

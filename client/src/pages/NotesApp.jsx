@@ -28,8 +28,9 @@ export default function NotesApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [user, setUser] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [showOfflineBanner, setShowOfflineBanner] = useState(!navigator.onLine);
+  const [isOnline, setIsOnline] = useState(true);
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+  const isOnlineRef = useRef(true);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [showFindReplace, setShowFindReplace] = useState(false);
   const [findText, setFindText] = useState('');
@@ -61,6 +62,7 @@ export default function NotesApp() {
   useEffect(() => { currentTagsRef.current = currentTags; }, [currentTags]);
   useEffect(() => { directFontSizeRef.current = directFontSize; }, [directFontSize]);
   useEffect(() => { titleRef.current = noteTitle; }, [noteTitle]);
+  useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
 
   useEffect(() => {
     function handleSelection() {
@@ -72,6 +74,19 @@ export default function NotesApp() {
     document.addEventListener('selectionchange', handleSelection);
     return () => document.removeEventListener('selectionchange', handleSelection);
   }, []);
+
+  // ─── Server Reachability Check ─────────────────────
+  async function checkServerReachable() {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(API + '/health', { signal: controller.signal });
+      clearTimeout(timeout);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
 
   // ─── Helpers ───────────────────────────────────────
   function getToken() { return localStorage.getItem('nv_token'); }
@@ -119,13 +134,34 @@ export default function NotesApp() {
     localStorage.setItem('nv_theme', isLight ? 'light' : 'dark');
   }, [isLight]);
 
-  // ─── Online/Offline detection ──────────────────────
+  // ─── Online/Offline detection (ping-based) ────────
   useEffect(() => {
-    const goOnline = () => { setIsOnline(true); setShowOfflineBanner(false); syncQueue(API, getToken()); };
-    const goOffline = () => { setIsOnline(false); setShowOfflineBanner(true); };
+    let intervalId;
+    async function pingServer() {
+      const reachable = await checkServerReachable();
+      if (reachable && !isOnlineRef.current) {
+        // Was offline, now back online
+        setIsOnline(true); setShowOfflineBanner(false);
+        syncQueue(API, getToken());
+      } else if (!reachable && isOnlineRef.current) {
+        // Was online, server went away
+        setIsOnline(false); setShowOfflineBanner(true);
+      }
+    }
+    // Check immediately on mount
+    pingServer();
+    // Then poll every 5 seconds
+    intervalId = setInterval(pingServer, 5000);
+    // Also listen for browser online/offline as a hint to re-check immediately
+    const goOnline = () => pingServer();
+    const goOffline = () => pingServer();
     window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);
-    return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
   }, []);
 
   // ─── Load User Profile ─────────────────────────────
@@ -145,20 +181,18 @@ export default function NotesApp() {
   const loadNotesList = useCallback(async (q = '') => {
     let notes = [];
     try {
-      if (navigator.onLine) {
-        const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
-        notes = await apiFetch(url);
-        cacheNotes(notes).catch(() => {});
-      } else {
-        notes = await getOfflineNotes();
+      // Always try API first (works for both local server + deployed)
+      const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
+      notes = await apiFetch(url);
+      cacheNotes(notes).catch(() => {});
+    } catch (e) {
+      if (!e.message.includes('Unauthorized')) {
+        // API failed — fall back to offline cache
+        notes = await getOfflineNotes().catch(() => []);
         if (q) {
           const ql = q.toLowerCase();
           notes = notes.filter(n => (n.title || '').toLowerCase().includes(ql));
         }
-      }
-    } catch (e) {
-      if (!e.message.includes('Unauthorized')) {
-        notes = await getOfflineNotes().catch(() => []);
         if (notes.length) showToastMsg('📴 Offline mode — showing cached notes', 3000);
         else showToastMsg('⚠️ Cannot reach server', 4000);
       }
@@ -179,14 +213,12 @@ export default function NotesApp() {
       if (editorRef.current) editorRef.current.innerHTML = '';
       setSaveStatus('pending');
       try {
-        if (navigator.onLine) {
-          note = await apiFetch(`/notes/${id}`);
-          noteCacheRef.current.set(id, note);
-          cacheNote(note).catch(() => {});
-        } else {
-          note = await getOfflineNote(id);
-        }
+        // Always try API first
+        note = await apiFetch(`/notes/${id}`);
+        noteCacheRef.current.set(id, note);
+        cacheNote(note).catch(() => {});
       } catch {
+        // API failed — try offline cache
         note = await getOfflineNote(id).catch(() => null);
       }
       if (!note) { showToastMsg('⚠️ Cannot load note'); return; }
@@ -221,19 +253,13 @@ export default function NotesApp() {
     }
     setIsDirty(false);
     try {
-      if (navigator.onLine) {
-        const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }) });
-        cacheNote(note).catch(() => {});
-        const notes = await loadNotesList();
-        await openNote(note.id);
-      } else {
-        const note = await saveNoteOffline(null, 'Untitled Note', '', []);
-        noteCacheRef.current.set(note.id, note);
-        const notes = await loadNotesList();
-        await openNote(note.id);
-        showToastMsg('📴 Note created offline — will sync later');
-      }
+      // Try API first
+      const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }) });
+      cacheNote(note).catch(() => {});
+      const notes = await loadNotesList();
+      await openNote(note.id);
     } catch {
+      // API failed — create offline
       const note = await saveNoteOffline(null, 'Untitled Note', '', []);
       noteCacheRef.current.set(note.id, note);
       await loadNotesList();
@@ -249,7 +275,8 @@ export default function NotesApp() {
     const id = activeIdRef.current;
     noteCacheRef.current.delete(id);
     try {
-      if (navigator.onLine) await apiFetch(`/notes/${id}`, { method: 'DELETE' });
+      // Try API first
+      await apiFetch(`/notes/${id}`, { method: 'DELETE' });
       deleteNoteOffline(id).catch(() => {});
     } catch {
       deleteNoteOffline(id).catch(() => {});
@@ -269,34 +296,25 @@ export default function NotesApp() {
     const newContent = editorRef.current?.innerHTML || '';
 
     try {
-      if (navigator.onLine) {
-        try {
-          const updated = await apiFetch(`/notes/${id}`, {
-            method: 'PUT',
-            body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
-          });
-          noteCacheRef.current.set(id, updated);
-          setNoteDate('Last saved: ' + fmtDate(updated.modified));
-          cacheNote(updated).catch(() => {});
-          setIsDirty(false);
-          setSaveStatus('ok');
-        } catch (apiError) {
-          // Check if it's a duplicate name error (409 Conflict)
-          if (apiError.status === 409 || apiError.message?.includes('already exists')) {
-            showToastMsg('⚠️ ' + apiError.message);
-            setSaveStatus('err');
-            return;
-          }
-          throw apiError;
-        }
-      } else {
-        await saveNoteOffline(id, newTitle, newContent, newTags);
-        setIsDirty(false);
-        setSaveStatus('ok');
-        setNoteDate('Saved offline');
-      }
+      // Always try API first
+      const updated = await apiFetch(`/notes/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: newTitle, content: newContent, tags: newTags }),
+      });
+      noteCacheRef.current.set(id, updated);
+      setNoteDate('Last saved: ' + fmtDate(updated.modified));
+      cacheNote(updated).catch(() => {});
+      setIsDirty(false);
+      setSaveStatus('ok');
     } catch (e) {
+      // Check if it's a duplicate name error (409 Conflict)
+      if (e.status === 409 || e.message?.includes('already exists')) {
+        showToastMsg('⚠️ ' + e.message);
+        setSaveStatus('err');
+        return;
+      }
       if (e.message?.includes('Unauthorized')) return;
+      // API unreachable — save offline
       try {
         await saveNoteOffline(id, newTitle, newContent, newTags);
         setIsDirty(false);
@@ -679,9 +697,8 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
       await Promise.all([loadUserProfile(), loadNotesList().then(notes => {
         if (notes.length > 0) openNote(notes[0].id);
       })]);
-      // Background prefetch
+      // Background prefetch (try API, silently skip on failure)
       setTimeout(async () => {
-        if (!navigator.onLine) return;
         const notes = noteCacheRef.current;
         for (const n of allNotes.slice(1)) {
           if (!notes.has(n.id)) {
@@ -689,11 +706,13 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               const full = await apiFetch(`/notes/${n.id}`);
               notes.set(n.id, full);
               cacheNote(full).catch(() => {});
-            } catch {}
+            } catch { break; } // stop prefetch if server unreachable
           }
         }
       }, 1500);
-      showToastMsg(navigator.onLine ? '📓 NoteVault ready!' : '📴 Offline mode');
+      // Show ready toast based on actual server reachability
+      const serverUp = await checkServerReachable();
+      showToastMsg(serverUp ? '📓 NoteVault ready!' : '📴 Offline mode');
     })();
   }, []);
 
