@@ -10,6 +10,7 @@
   --accent:    #6c63ff;
   --accent2:   #a78bfa;
   --text:      #e2e8f0;
+  --fg:        #e2e8f0;
   --muted:     #8892aa;
   --danger:    #f87171;
   --success:   #34d399;
@@ -29,6 +30,7 @@ body.light {
   --accent:    #5b52e0;
   --accent2:   #7c6fe8;
   --text:      #1a1d2e;
+  --fg:        #1a1d2e;
   --muted:     #6b7280;
   --danger:    #dc2626;
   --success:   #059669;
@@ -545,9 +547,6 @@ body { display: flex; }
 
 /* ─── Toast ─────────────────────────────────────────────── */
 .toast {
-  position: fixed;
-  bottom: 28px;
-  right: 28px;
   background: var(--card);
   border: 1px solid var(--border);
   color: var(--text);
@@ -559,9 +558,10 @@ body { display: flex; }
   opacity: 0;
   pointer-events: none;
   transition: opacity .3s, transform .3s;
-  z-index: 9999;
+  white-space: nowrap;
+  max-width: 90vw;
 }
-.toast.show { opacity: 1; transform: translateY(0); }
+.toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
 
 /* ─── Offline Banner ─────────────────────────────────────── */
 .offline-banner {
@@ -692,11 +692,18 @@ body { display: flex; }
   .tags-row { padding: 6px 12px; }
   .statusbar { padding: 4px 12px; }
 
-  /* Toast at bottom center */
-  .toast { right: 16px; bottom: 16px; left: 16px; text-align: center; }
+  /* Toast mobile styling */
+  .toast { text-align: center; }
 
   /* Empty state padding for hamburger */
   .empty-state { padding-top: 56px; }
+
+  /* Larger touch targets for toolbar buttons */
+  .tb-btn { min-height: 36px; min-width: 36px; font-size: .75rem; padding: 4px 6px; }
+  .tb-save, .tb-saveas { min-width: unset; padding: 4px 10px; }
+
+  /* Note items in sidebar tree */
+  .note-item { padding: 10px 12px; }
 }
 
 /* ─── Extra small devices (phones < 400px) ───────────────── */

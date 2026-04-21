@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const axios = require('axios');
-const { authMiddleware, makeToken } = require('../middleware/auth');
+const { authMiddleware, makeToken, blacklistToken } = require('../middleware/auth');
 const { formatUser } = require('../utils/helpers');
 
 // Python bcrypt stores hashes as Binary in MongoDB.
@@ -146,12 +146,14 @@ module.exports = function (db) {
 
   router.get('/google', (req, res) => {
     if (!GOOGLE_CLIENT_ID) return res.status(501).json({ error: 'Google OAuth not configured' });
+    const state = req.query.link_token ? JSON.stringify({ link_token: req.query.link_token }) : '';
     const params = new URLSearchParams({
       client_id: GOOGLE_CLIENT_ID,
       redirect_uri: `${APP_URL}/api/auth/google/callback`,
       response_type: 'code',
       scope: 'openid email profile',
       access_type: 'online',
+      ...(state && { state }),
     });
     res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
   });
@@ -179,6 +181,21 @@ module.exports = function (db) {
       const { email, name, picture: avatar, sub: oauth_id } = payload;
       const { user } = await findOrCreateOAuthUser(users, email, name, avatar, 'google', oauth_id);
       const token = makeToken(user._id);
+
+      // If linking, redirect back with existing token
+      let linkToken = null;
+      try { linkToken = JSON.parse(req.query.state || '{}').link_token; } catch {}
+      if (linkToken) {
+        // Link the Google provider to the account that owns this token
+        const jwt = require('jsonwebtoken');
+        try {
+          const decoded = jwt.verify(linkToken, process.env.JWT_SECRET_KEY);
+          const { ObjectId } = require('mongodb');
+          await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'google' } });
+        } catch {}
+        return res.redirect(`/index.html?token=${linkToken}&linked=google`);
+      }
+
       const nextPage = user.profile_done ? 'index.html' : 'profile-setup.html';
       res.redirect(`/${nextPage}?token=${token}`);
     } catch (err) {
@@ -196,10 +213,12 @@ module.exports = function (db) {
 
   router.get('/github', (req, res) => {
     if (!GITHUB_CLIENT_ID) return res.status(501).json({ error: 'GitHub OAuth not configured' });
+    const state = req.query.link_token || '';
     const params = new URLSearchParams({
       client_id: GITHUB_CLIENT_ID,
       redirect_uri: `${APP_URL}/api/auth/github/callback`,
       scope: 'user:email',
+      ...(state && { state }),
     });
     res.redirect(`https://github.com/login/oauth/authorize?${params}`);
   });
@@ -231,11 +250,48 @@ module.exports = function (db) {
 
       const { user } = await findOrCreateOAuthUser(users, email, name, avatar, 'github', oauth_id);
       const token = makeToken(user._id);
+
+      // If linking, redirect back with existing token
+      const linkToken = req.query.state || '';
+      if (linkToken) {
+        const jwt = require('jsonwebtoken');
+        try {
+          const decoded = jwt.verify(linkToken, process.env.JWT_SECRET_KEY);
+          const { ObjectId } = require('mongodb');
+          await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'github' } });
+        } catch {}
+        return res.redirect(`/index.html?token=${linkToken}&linked=github`);
+      }
+
       const nextPage = user.profile_done ? 'index.html' : 'profile-setup.html';
       res.redirect(`/${nextPage}?token=${token}`);
     } catch (err) {
       console.error('GitHub OAuth error:', err.message);
       res.redirect('/login.html?error=github_failed');
+    }
+  });
+
+  // ════════════════════════════════════════════════════
+  //  LINK PHONE NUMBER
+  // ════════════════════════════════════════════════════
+
+  router.post('/link/phone', authMiddleware, async (req, res) => {
+    try {
+      const { ObjectId } = require('mongodb');
+      const phone = (req.body.phone || '').trim();
+      if (!phone) return res.status(400).json({ error: 'Phone number required' });
+      // Check if phone already used by another account
+      const existing = await users.findOne({ phone, _id: { $ne: new ObjectId(req.userId) } });
+      if (existing) return res.status(409).json({ error: 'Phone number already linked to another account' });
+      await users.updateOne(
+        { _id: new ObjectId(req.userId) },
+        { $set: { phone }, $addToSet: { auth_providers: 'phone' } }
+      );
+      const user = await users.findOne({ _id: new ObjectId(req.userId) });
+      res.json(formatUser(user));
+    } catch (err) {
+      console.error('Link phone error:', err);
+      res.status(500).json({ error: 'Server error' });
     }
   });
 
@@ -281,6 +337,20 @@ module.exports = function (db) {
       res.json(formatUser(user));
     } catch (err) {
       console.error('Profile update error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+  // ════════════════════════════════════════════════════
+  //  LOGOUT (blacklist token)
+  // ════════════════════════════════════════════════════
+
+  router.post('/logout', authMiddleware, async (req, res) => {
+    try {
+      const token = req.headers.authorization.split(' ')[1];
+      await blacklistToken(token);
+      res.json({ ok: true, message: 'Logged out — token revoked' });
+    } catch (err) {
+      console.error('Logout error:', err);
       res.status(500).json({ error: 'Server error' });
     }
   });

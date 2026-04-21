@@ -25,3 +25,9 @@ Thumbs.db
 # Scripts (local only)
 Start_NoteVault.bat
 notes_stop.bat
+SUGGESTIONS.md
+test_features.js
+test_fullstack.js
+
+# Gemini
+.gemini/

@@ -1,0 +1,14 @@
+{
+  "name": "notevault",
+  "version": "2.0.0",
+  "description": "NoteVault – Private notes app built with the MERN stack",
+  "scripts": {
+    "start": "cd server && node server.js",
+    "dev": "cd server && node server.js",
+    "build": "cd client && npm install && npm run build",
+    "install:all": "cd server && npm install && cd ../client && npm install"
+  },
+  "keywords": ["notes", "mern", "react", "express", "mongodb"],
+  "author": "Prasanth Gannavarapu",
+  "license": "ISC"
+}

@@ -19,12 +19,15 @@ function formatUser(doc) {
 
 function formatNote(doc) {
   return {
-    id:       String(doc._id),
-    title:    doc.title || 'Untitled Note',
-    content:  doc.content || '',
-    tags:     doc.tags || [],
-    created:  doc.created || 0,
-    modified: doc.modified || 0,
+    id:         String(doc._id),
+    title:      doc.title || 'Untitled Note',
+    content:    doc.content || '',
+    tags:       doc.tags || [],
+    folder:     doc.folder || '',
+    pinned:     doc.pinned || false,
+    deleted_at: doc.deleted_at || null,
+    created:    doc.created || 0,
+    modified:   doc.modified || 0,
   };
 }
 

@@ -1,7 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import API from '../config.js';
-import { cacheNotes, cacheNote, getOfflineNotes, getOfflineNote, saveNoteOffline, deleteNoteOffline, syncQueue } from '../offline.js';
+import {
+  cacheNotes, cacheNote, getOfflineNotes, getOfflineNote, getOfflineTrash,
+  saveNoteOffline, deleteNoteOffline, trashNoteOffline, restoreNoteOffline,
+  permanentDeleteOffline, pinNoteOffline,
+  cacheFolders, getOfflineFolders, createFolderOffline, deleteFolderOffline,
+  syncQueue,
+} from '../offline.js';
 
 /* ═══════════════════════════════════════════════════════
    NotesApp – Main page (replaces index.html + app.js)
@@ -22,7 +28,7 @@ export default function NotesApp() {
   const [saveStatus, setSaveStatus] = useState('ok');
   const [wordCount, setWordCount] = useState('0 words · 0 chars');
   const [search, setSearch] = useState('');
-  const [toast, setToast] = useState({ msg: '', show: false });
+  const [toastQueue, setToastQueue] = useState([]);  // [{id, msg}]
   const [isLight, setIsLight] = useState(localStorage.getItem('nv_theme') !== 'dark');
   const [showModal, setShowModal] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -33,6 +39,10 @@ export default function NotesApp() {
   const isOnlineRef = useRef(true);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [showFindReplace, setShowFindReplace] = useState(false);
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(window.innerWidth < 768);
+  const [titleBarCollapsed, setTitleBarCollapsed] = useState(false);
+  const [showProfileEdit, setShowProfileEdit] = useState(false);
+  const [profileForm, setProfileForm] = useState({ name: '', username: '', age: '', role: '' });
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [lineSpacing, setLineSpacing] = useState('1.75');
@@ -47,6 +57,14 @@ export default function NotesApp() {
   const [wordSpaceMode, setWordSpaceMode] = useState('normal');
   const [customMarkColor, setCustomMarkColor] = useState('#ffff00');
   const [customTextColor, setCustomTextColor] = useState('#e2e8f0');
+  // Trash & Folders
+  const [sidebarView, setSidebarView] = useState('notes'); // 'notes' | 'trash'
+  const [trashNotes, setTrashNotes] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [activeFolder, setActiveFolder] = useState('');    // '' = all notes
+  const [noteFolder, setNoteFolder] = useState('');        // current note's folder
+  const [openTabs, setOpenTabs] = useState([]);            // [{id, title}]
+  const [collapsedFolders, setCollapsedFolders] = useState(new Set());
 
   const activeIdRef = useRef(null);
   const isDirtyRef = useRef(false);
@@ -79,7 +97,7 @@ export default function NotesApp() {
   async function checkServerReachable() {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
+      const timeout = setTimeout(() => controller.abort(), 4000); // 4s for mobile networks
       const res = await fetch(API + '/health', { signal: controller.signal });
       clearTimeout(timeout);
       return res.ok;
@@ -91,9 +109,11 @@ export default function NotesApp() {
   // ─── Helpers ───────────────────────────────────────
   function getToken() { return localStorage.getItem('nv_token'); }
 
+  const toastIdRef = useRef(0);
   function showToastMsg(msg, duration = 2400) {
-    setToast({ msg, show: true });
-    setTimeout(() => setToast({ msg: '', show: false }), duration);
+    const id = ++toastIdRef.current;
+    setToastQueue(prev => [...prev.slice(-4), { id, msg }]); // keep max 5
+    setTimeout(() => setToastQueue(prev => prev.filter(t => t.id !== id)), duration);
   }
 
   function fmtDate(ts) {
@@ -138,20 +158,30 @@ export default function NotesApp() {
   useEffect(() => {
     let intervalId;
     async function pingServer() {
+      // Skip polling when the tab is hidden to save bandwidth
+      if (document.hidden) return;
       const reachable = await checkServerReachable();
       if (reachable && !isOnlineRef.current) {
         // Was offline, now back online
+        isOnlineRef.current = true;
         setIsOnline(true); setShowOfflineBanner(false);
-        syncQueue(API, getToken());
+        await syncQueue(API, getToken());
+        // Refresh UI after sync
+        loadNotesList('', '').catch(() => {});
+        loadFolders();
       } else if (!reachable && isOnlineRef.current) {
         // Was online, server went away
+        isOnlineRef.current = false;
         setIsOnline(false); setShowOfflineBanner(true);
       }
     }
     // Check immediately on mount
     pingServer();
-    // Then poll every 5 seconds
-    intervalId = setInterval(pingServer, 5000);
+    // Poll every 15 seconds (reduced from 5s to save bandwidth)
+    intervalId = setInterval(pingServer, 15000);
+    // Re-check immediately when tab becomes visible again
+    const onVisibility = () => { if (!document.hidden) pingServer(); };
+    document.addEventListener('visibilitychange', onVisibility);
     // Also listen for browser online/offline as a hint to re-check immediately
     const goOnline = () => pingServer();
     const goOffline = () => pingServer();
@@ -159,6 +189,7 @@ export default function NotesApp() {
     window.addEventListener('offline', goOffline);
     return () => {
       clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', goOnline);
       window.removeEventListener('offline', goOffline);
     };
@@ -178,11 +209,13 @@ export default function NotesApp() {
   }
 
   // ─── Load Notes List ───────────────────────────────
-  const loadNotesList = useCallback(async (q = '') => {
+  const loadNotesList = useCallback(async (q = '', folder = '') => {
     let notes = [];
     try {
       // Always try API first (works for both local server + deployed)
-      const url = q ? `/notes?q=${encodeURIComponent(q)}` : '/notes';
+      let url = '/notes?';
+      if (q) url += `q=${encodeURIComponent(q)}&`;
+      if (folder) url += `folder=${encodeURIComponent(folder)}&`;
       notes = await apiFetch(url);
       cacheNotes(notes).catch(() => {});
     } catch (e) {
@@ -192,6 +225,9 @@ export default function NotesApp() {
         if (q) {
           const ql = q.toLowerCase();
           notes = notes.filter(n => (n.title || '').toLowerCase().includes(ql));
+        }
+        if (folder) {
+          notes = notes.filter(n => (n.folder || '') === folder);
         }
         if (notes.length) showToastMsg('📴 Offline mode — showing cached notes', 3000);
         else showToastMsg('⚠️ Cannot reach server', 4000);
@@ -205,6 +241,12 @@ export default function NotesApp() {
   async function openNote(id) {
     setActiveIdState(id);
     setSidebarOpen(false);
+    // Add to open tabs if not already there
+    setOpenTabs(prev => {
+      if (prev.find(t => t.id === id)) return prev;
+      const note = noteCacheRef.current.get(id);
+      return [...prev, { id, title: note?.title || 'Loading…' }];
+    });
     let note = noteCacheRef.current.get(id);
     if (note) {
       renderNote(note);
@@ -233,8 +275,11 @@ export default function NotesApp() {
     titleRef.current = note.title || '';
     setCurrentTags([...(note.tags || [])]);
     currentTagsRef.current = [...(note.tags || [])];
+    setNoteFolder(note.folder || '');
     setNoteDate('Last saved: ' + fmtDate(note.modified));
     setSaveStatus('ok');
+    // Sync tab title
+    setOpenTabs(prev => prev.map(t => t.id === note.id ? { ...t, title: note.title || 'Untitled' } : t));
     requestAnimationFrame(() => {
       if (editorRef.current) {
         editorRef.current.innerHTML = note.content || '';
@@ -252,39 +297,236 @@ export default function NotesApp() {
       else if (choice === 'cancel') return;
     }
     setIsDirty(false);
+    setSidebarView('notes'); // switch to notes view if in trash
     try {
-      // Try API first
-      const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [] }) });
+      // Create note in the currently active folder
+      const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [], folder: activeFolder }) });
       cacheNote(note).catch(() => {});
-      const notes = await loadNotesList();
+      await loadNotesList('', activeFolder);
+      loadFolders();
       await openNote(note.id);
     } catch {
       // API failed — create offline
       const note = await saveNoteOffline(null, 'Untitled Note', '', []);
       noteCacheRef.current.set(note.id, note);
-      await loadNotesList();
+      await loadNotesList('', activeFolder);
       await openNote(note.id);
       showToastMsg('📴 Note created offline — will sync later');
     }
   }
 
-  // ─── Delete Note ───────────────────────────────────
+  // ─── Delete Note (soft-delete → trash) ────────────
   async function deleteNote() {
     if (!activeIdRef.current) return;
-    if (!window.confirm('Delete this note? This cannot be undone.')) return;
+    if (!window.confirm('Move this note to Trash?')) return;
     const id = activeIdRef.current;
     noteCacheRef.current.delete(id);
     try {
-      // Try API first
       await apiFetch(`/notes/${id}`, { method: 'DELETE' });
-      deleteNoteOffline(id).catch(() => {});
+      // API did the trash — just update local IDB cache (no sync_queue)
+      const cached = await getOfflineNote(id);
+      if (cached) { cached.deleted_at = Date.now(); cached.is_dirty = false; cacheNote(cached).catch(() => {}); }
     } catch {
-      deleteNoteOffline(id).catch(() => {});
+      // API unreachable — queue for sync
+      await trashNoteOffline(id).catch(() => {});
     }
     setActiveIdState(null);
     setIsDirty(false);
     await loadNotesList(search);
-    showToastMsg('🗑️ Note deleted');
+    showToastMsg('🗑️ Moved to Trash (auto-deletes in 7 days)');
+  }
+
+  // ─── Trash Operations ─────────────────────────────
+  async function loadTrash() {
+    try {
+      const items = await apiFetch('/notes/trash');
+      setTrashNotes(items);
+    } catch {
+      // Offline fallback — show cached trashed notes
+      const items = await getOfflineTrash().catch(() => []);
+      setTrashNotes(items);
+    }
+  }
+
+  async function restoreNote(id) {
+    try {
+      await apiFetch(`/notes/${id}/restore`, { method: 'POST' });
+      showToastMsg('♻️ Note restored');
+    } catch {
+      // Offline fallback
+      await restoreNoteOffline(id).catch(() => {});
+      showToastMsg('♻️ Restored offline — will sync later');
+    }
+    await loadTrash();
+    await loadNotesList(search);
+    loadFolders();
+  }
+
+  async function permanentDelete(id) {
+    if (!window.confirm('Permanently delete this note? This cannot be undone.')) return;
+    try {
+      await apiFetch(`/notes/${id}/permanent`, { method: 'DELETE' });
+      showToastMsg('🗑️ Permanently deleted');
+    } catch {
+      // Offline fallback
+      await permanentDeleteOffline(id).catch(() => {});
+      showToastMsg('🗑️ Deleted offline — will sync later');
+    }
+    await loadTrash();
+  }
+
+  // ─── Folder Operations ────────────────────────────
+  async function loadFolders() {
+    try {
+      const f = await apiFetch('/notes/folders');
+      setFolders(f);
+      cacheFolders(f).catch(() => {});
+    } catch {
+      // Offline fallback
+      const f = await getOfflineFolders().catch(() => []);
+      setFolders(f);
+    }
+  }
+
+  async function createFolder() {
+    const name = prompt('Enter folder name:');
+    if (!name || !name.trim()) return;
+    try {
+      await apiFetch('/notes/folders', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+      showToastMsg(`📁 Folder "${name.trim()}" created`);
+    } catch (e) {
+      if (e.message?.includes('already exists')) { showToastMsg('⚠️ Folder already exists'); return; }
+      // Offline fallback
+      await createFolderOffline(name.trim()).catch(() => {});
+      showToastMsg(`📁 Folder created offline — will sync later`);
+    }
+    await loadFolders();
+    setActiveFolder(name.trim());
+  }
+
+  async function moveNoteToFolder(noteId, folder) {
+    try {
+      await apiFetch(`/notes/${noteId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: titleRef.current, content: editorRef.current?.innerHTML || '', tags: currentTagsRef.current, folder }),
+      });
+      setNoteFolder(folder);
+      await loadNotesList(search, activeFolder);
+      loadFolders();
+      showToastMsg(folder ? `📁 Moved to "${folder}"` : '📄 Moved to All Notes');
+    } catch {
+      showToastMsg('⚠️ Failed to move note');
+    }
+  }
+
+  async function deleteFolder(folderName) {
+    if (!window.confirm(`Delete folder "${folderName}"? Notes inside will be moved to All Notes.`)) return;
+    try {
+      await apiFetch(`/notes/folders/${encodeURIComponent(folderName)}`, { method: 'DELETE' });
+      showToastMsg(`🗑️ Folder "${folderName}" deleted`);
+    } catch {
+      // Offline fallback
+      await deleteFolderOffline(folderName).catch(() => {});
+      showToastMsg(`🗑️ Folder deleted offline — will sync later`);
+    }
+    if (activeFolder === folderName) setActiveFolder('');
+    if (noteFolder === folderName) setNoteFolder('');
+    await loadFolders();
+    await loadNotesList(search, '');
+  }
+
+  // ─── Pin / Unpin Note ─────────────────────────────
+  const [noteMenu, setNoteMenu] = useState(null); // id of note whose menu is open
+  const [folderMenu, setFolderMenu] = useState(null); // name of folder whose menu is open
+
+  async function togglePin(noteId) {
+    try {
+      const res = await apiFetch(`/notes/${noteId}/pin`, { method: 'POST' });
+      showToastMsg(res.pinned ? '📌 Note pinned' : '📌 Note unpinned');
+    } catch {
+      // Offline fallback
+      const note = await pinNoteOffline(noteId).catch(() => null);
+      showToastMsg(note?.pinned ? '📌 Pinned offline' : '📌 Unpinned offline');
+    }
+    await loadNotesList(search, activeFolder);
+    setNoteMenu(null);
+  }
+
+  async function quickMoveToFolder(noteId, folder) {
+    try {
+      // Get current note data
+      const note = noteCacheRef.current.get(noteId) || await apiFetch(`/notes/${noteId}`);
+      await apiFetch(`/notes/${noteId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: note.title, content: note.content || '', tags: note.tags || [], folder }),
+      });
+      await loadNotesList(search, activeFolder);
+      loadFolders();
+      showToastMsg(folder ? `📁 Moved to "${folder}"` : '📄 Moved to All');
+    } catch {
+      showToastMsg('⚠️ Failed to move');
+    }
+    setNoteMenu(null);
+  }
+
+  async function quickDelete(noteId) {
+    try {
+      await apiFetch(`/notes/${noteId}`, { method: 'DELETE' });
+      // API handled it — just update IDB cache (no sync_queue)
+      const cached = await getOfflineNote(noteId);
+      if (cached) { cached.deleted_at = Date.now(); cached.is_dirty = false; cacheNote(cached).catch(() => {}); }
+      showToastMsg('🗑️ Moved to Trash');
+    } catch {
+      // Offline fallback — queue for sync
+      await trashNoteOffline(noteId).catch(() => {});
+      showToastMsg('🗑️ Trashed offline — will sync later');
+    }
+    if (activeIdRef.current === noteId) setActiveIdState(null);
+    noteCacheRef.current.delete(noteId);
+    await loadNotesList(search, activeFolder);
+    setNoteMenu(null);
+  }
+
+  async function renameNote(noteId) {
+    const note = noteCacheRef.current.get(noteId) || await getOfflineNote(noteId);
+    const oldTitle = note?.title || 'Untitled Note';
+    const newTitle = prompt('Rename note:', oldTitle);
+    if (!newTitle || !newTitle.trim() || newTitle.trim() === oldTitle) { setNoteMenu(null); return; }
+    try {
+      const updated = await apiFetch(`/notes/${noteId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ title: newTitle.trim(), content: note?.content || '', tags: note?.tags || [] }),
+      });
+      noteCacheRef.current.set(noteId, updated);
+      cacheNote(updated).catch(() => {});
+      if (activeIdRef.current === noteId) { setNoteTitle(newTitle.trim()); titleRef.current = newTitle.trim(); }
+      showToastMsg('✏️ Note renamed');
+    } catch {
+      showToastMsg('⚠️ Failed to rename');
+    }
+    await loadNotesList(search, activeFolder);
+    setOpenTabs(prev => prev.map(t => t.id === noteId ? { ...t, title: newTitle.trim() } : t));
+    setNoteMenu(null);
+  }
+
+  async function renameFolder(oldName) {
+    const newName = prompt('Rename folder:', oldName);
+    if (!newName || !newName.trim() || newName.trim() === oldName) { setFolderMenu(null); return; }
+    try {
+      await apiFetch(`/notes/folders/${encodeURIComponent(oldName)}/rename`, {
+        method: 'PUT',
+        body: JSON.stringify({ newName: newName.trim() }),
+      });
+      if (activeFolder === oldName) setActiveFolder(newName.trim());
+      if (noteFolder === oldName) setNoteFolder(newName.trim());
+      showToastMsg('✏️ Folder renamed');
+    } catch (e) {
+      if (e.message?.includes('already exists')) showToastMsg('⚠️ ' + e.message);
+      else showToastMsg('⚠️ Failed to rename folder');
+    }
+    await loadFolders();
+    await loadNotesList(search, activeFolder === oldName ? newName.trim() : activeFolder);
+    setFolderMenu(null);
   }
 
   // ─── Save Note ─────────────────────────────────────
@@ -461,6 +703,54 @@ export default function NotesApp() {
     }
   }
 
+  // ─── Clear ALL Formatting ─────────────────────────
+  function clearAllFormatting() {
+    editorRef.current?.focus({ preventScroll: true });
+
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+
+    const range = sel.getRangeAt(0);
+    const selectedText = sel.toString();
+    const hasSelection = !range.collapsed && selectedText.length > 0;
+
+    if (hasSelection) {
+      // Step 1: Use removeFormat for standard inline (bold, italic, underline, font)
+      document.execCommand('removeFormat');
+      document.execCommand('unlink');
+
+      // Step 2: Replace the remaining selection with plain text
+      // This catches anything removeFormat missed (span colors, marks, custom styles)
+      const sel2 = window.getSelection();
+      if (sel2.rangeCount > 0) {
+        const r = sel2.getRangeAt(0);
+        r.deleteContents();
+        r.insertNode(document.createTextNode(selectedText));
+        // Collapse cursor to end of inserted text
+        sel2.collapseToEnd();
+      }
+    } else {
+      // No selection — cursor in a block: reset heading → paragraph
+      document.execCommand('removeFormat');
+      document.execCommand('formatBlock', false, 'p');
+    }
+
+    // Reset toolbar toggle states
+    setSizeMode('normal');
+    setDirectFontSize('16');
+    setMarkMode('normal');
+    setCustomMarkColor('#ffff00');
+    setTextColorMode('normal');
+    setCustomTextColor('#e2e8f0');
+    setLineSpaceMode('normal');
+    setLineSpacing('1.75');
+    setWordSpaceMode('normal');
+    setWordSpacing('normal');
+
+    scheduleSave();
+    showToastMsg('✨ Formatting cleared');
+  }
+
   // ─── Print Document ────────────────────────────────
   function printDocument() {
     const title = titleRef.current || 'Untitled Note';
@@ -501,7 +791,15 @@ export default function NotesApp() {
       sel.removeAllRanges();
       sel.addRange(savedRangeRef.current);
     }
-    if (['h1', 'h2', 'h3'].includes(cmd)) document.execCommand('formatBlock', false, cmd);
+    if (['h1', 'h2', 'h3'].includes(cmd)) {
+      // Toggle: if the current block is already this heading, switch back to <p>
+      const currentBlock = document.queryCommandValue('formatBlock');
+      if (currentBlock.toLowerCase() === cmd) {
+        document.execCommand('formatBlock', false, 'p');
+      } else {
+        document.execCommand('formatBlock', false, cmd);
+      }
+    }
     else if (cmd === 'fontSize') document.execCommand('fontSize', false, value);
     else if (cmd === 'foreColor') document.execCommand('foreColor', false, value);
     else document.execCommand(cmd, false, value);
@@ -694,7 +992,14 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
   // ─── Init ──────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      await Promise.all([loadUserProfile(), loadNotesList().then(notes => {
+      // Handle OAuth link callback
+      const urlParams = new URLSearchParams(window.location.search);
+      const linked = urlParams.get('linked');
+      if (linked) {
+        showToastMsg(`✅ ${linked.charAt(0).toUpperCase() + linked.slice(1)} account linked!`);
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+      await Promise.all([loadUserProfile(), loadFolders(), loadNotesList().then(notes => {
         if (notes.length > 0) openNote(notes[0].id);
       })]);
       // Background prefetch (try API, silently skip on failure)
@@ -718,9 +1023,10 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
   // ─── Debounced search ──────────────────────────────
   useEffect(() => {
+    if (sidebarView === 'trash') return;
     const t = setTimeout(() => loadNotesList(search), 300);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, sidebarView]);
 
   const filePickerRef = useRef(null);
 
@@ -765,14 +1071,16 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               <span className="user-menu-icon">⋮</span>
             </div>
             <div className="user-dropdown">
+              <button className="dropdown-item" style={{ color: 'var(--fg)' }}
+                onClick={(e) => { e.stopPropagation(); setProfileForm({ name: user.name || '', username: user.username || '', age: user.age || '', role: user.role || '' }); setShowProfileEdit(true); }}>
+                <span className="dropdown-icon">✏️</span> Edit Details
+              </button>
               <button className="dropdown-item danger" id="btnLogout"
                 onClick={(e) => { e.stopPropagation(); localStorage.removeItem('nv_token'); localStorage.removeItem('nv_user'); navigate('/login'); }}>
                 <span className="dropdown-icon">⏏</span> Sign out
               </button>
             </div>
           </div>
-
-          <button className="btn-new" onClick={createNote}>＋ New Note</button>
         </div>
 
         <div className="search-wrap">
@@ -781,36 +1089,192 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
 
-        <div className="notes-list-label">Notes</div>
-        <ul className="notes-list">
-          {allNotes.length === 0 && (
-            <li style={{ color: 'var(--muted)', fontSize: '.82rem', padding: 16, textAlign: 'center' }}>
-              {search ? 'No notes match your search.' : 'No notes yet.'}
-            </li>
-          )}
-          {allNotes.map(n => (
-            <li key={n.id} className={`note-item ${n.id === activeId ? 'active' : ''}`}
-              onClick={async () => {
-                if (n.id === activeId) return;
-                if (isDirtyRef.current) {
-                  const choice = await showUnsavedModal();
-                  if (choice === 'save') await saveCurrentNote();
-                  else if (choice === 'cancel') return;
-                }
-                setIsDirty(false);
-                openNote(n.id);
-              }}>
-              <div className="note-item-title">{escHTML(n.title || 'Untitled')}</div>
-              <div className="note-item-meta"><span>{fmtDate(n.modified || n.updated_at)}</span></div>
-              <div className="note-item-preview">{stripHTML(n.content || '').slice(0, 80)}</div>
-              {(n.tags || []).length > 0 && (
-                <div style={{ marginTop: 4 }}>
-                  {n.tags.map((t, i) => <span key={i} className="note-tag">#{t}</span>)}
+        {/* ── Sidebar Navigation Tabs ── */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)' }}>
+          <button
+            style={{ flex: 1, padding: '8px 0', background: sidebarView === 'notes' ? 'var(--card)' : 'transparent', border: 'none', borderBottom: sidebarView === 'notes' ? '2px solid var(--accent)' : '2px solid transparent', color: sidebarView === 'notes' ? 'var(--accent2)' : 'var(--muted)', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+            onClick={() => { setSidebarView('notes'); loadNotesList(search, activeFolder); }}
+          >📝 Notes</button>
+          <button
+            style={{ flex: 1, padding: '8px 0', background: sidebarView === 'trash' ? 'var(--card)' : 'transparent', border: 'none', borderBottom: sidebarView === 'trash' ? '2px solid var(--danger)' : '2px solid transparent', color: sidebarView === 'trash' ? 'var(--danger)' : 'var(--muted)', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+            onClick={() => { setSidebarView('trash'); loadTrash(); setActiveIdState(null); }}
+          >🗑️ Trash</button>
+        </div>
+
+        {/* ── Notes View — VS Code-like Tree ── */}
+        {sidebarView === 'notes' && (<div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          {/* New note + folder buttons */}
+          <div style={{ padding: '6px 12px', display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+            <button
+              style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--muted)', fontSize: '.7rem', cursor: 'pointer', fontFamily: 'var(--font)' }}
+              onClick={createNote}
+              title="New note"
+            >＋ Note</button>
+            <button
+              style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--muted)', fontSize: '.7rem', cursor: 'pointer', fontFamily: 'var(--font)' }}
+              onClick={createFolder}
+              title="New folder"
+            >＋ Folder</button>
+          </div>
+
+          {/* Folder Tree */}
+          {folders.map(f => {
+            const folderNotes = allNotes.filter(n => n.folder === f);
+            const isCollapsed = collapsedFolders.has(f);
+            return (
+              <div key={f}>
+                <div
+                  style={{ display: 'flex', alignItems: 'center', padding: '6px 12px', cursor: 'pointer', fontSize: '.78rem', fontWeight: 600, color: 'var(--fg)', fontFamily: 'var(--font)', borderBottom: '1px solid rgba(255,255,255,.04)', userSelect: 'none', position: 'relative' }}
+                  onClick={() => {
+                    setCollapsedFolders(prev => {
+                      const next = new Set(prev);
+                      next.has(f) ? next.delete(f) : next.add(f);
+                      return next;
+                    });
+                    setActiveFolder(f);
+                  }}
+                >
+                  <span style={{ marginRight: 4, fontSize: '.65rem', opacity: .5 }}>{isCollapsed ? '▶' : '▼'}</span>
+                  <span style={{ marginRight: 4 }}>📁</span>
+                  <span style={{ flex: 1 }}>{f}</span>
+                  <span style={{ fontSize: '.6rem', color: 'var(--muted)', marginRight: 6 }}>{folderNotes.length}</span>
+                  <button
+                    style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '.85rem', cursor: 'pointer', padding: '0 4px', lineHeight: 1, flexShrink: 0 }}
+                    onClick={(e) => { e.stopPropagation(); setFolderMenu(folderMenu === f ? null : f); }}
+                    title="Folder options"
+                  >⋮</button>
+                  {folderMenu === f && (
+                    <div style={{ position: 'absolute', right: 8, top: 28, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 140, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
+                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameFolder(f)}>✏️ Rename</button>
+                      <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => { setFolderMenu(null); deleteFolder(f); }}>🗑️ Delete folder</button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </li>
-          ))}
-        </ul>
+                {!isCollapsed && folderNotes.map(n => (
+                  <div key={n.id}
+                    style={{ display: 'flex', alignItems: 'center', padding: '5px 12px 5px 28px', cursor: 'pointer', fontSize: '.76rem', color: n.id === activeId ? 'var(--accent2)' : 'var(--fg)', background: n.id === activeId ? 'rgba(108,99,255,.1)' : 'transparent', fontFamily: 'var(--font)', borderLeft: n.id === activeId ? '2px solid var(--accent)' : '2px solid transparent', position: 'relative' }}
+                    onClick={async () => {
+                      if (noteMenu) { setNoteMenu(null); return; }
+                      if (n.id === activeId) return;
+                      if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
+                      setIsDirty(false); openNote(n.id);
+                    }}
+                  >
+                    {n.pinned && <span style={{ marginRight: 3, fontSize: '.6rem' }}>📌</span>}
+                    <span style={{ marginRight: 4, fontSize: '.65rem' }}>📄</span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{escHTML(n.title || 'Untitled')}</span>
+                    <button
+                      style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '.85rem', cursor: 'pointer', padding: '0 4px', flexShrink: 0, lineHeight: 1 }}
+                      onClick={(e) => { e.stopPropagation(); setNoteMenu(noteMenu === n.id ? null : n.id); }}
+                    >⋮</button>
+                    {noteMenu === n.id && (
+                      <div style={{ position: 'absolute', right: 4, top: 22, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 150, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameNote(n.id)}>✏️ Rename</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => togglePin(n.id)}>{n.pinned ? '📌 Unpin' : '📌 Pin'}</button>
+                        <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                        <div style={{ padding: '3px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Move to</div>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickMoveToFolder(n.id, '')}>📄 Unfiled</button>
+                        {folders.filter(ff => ff !== f).map(ff => (
+                          <button key={ff} style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickMoveToFolder(n.id, ff)}>📁 {ff}</button>
+                        ))}
+                        <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickDelete(n.id)}>🗑️ Delete</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+
+          {/* Unfiled Notes */}
+          {(() => {
+            const unfiled = allNotes.filter(n => !n.folder);
+            if (unfiled.length === 0 && folders.length > 0) return null;
+            return (
+              <div>
+                {folders.length > 0 && (
+                  <div style={{ padding: '6px 12px', fontSize: '.72rem', color: 'var(--muted)', fontWeight: 600, fontFamily: 'var(--font)', borderBottom: '1px solid rgba(255,255,255,.04)' }}>
+                    📄 Unfiled
+                  </div>
+                )}
+                {unfiled.map(n => (
+                  <div key={n.id}
+                    style={{ display: 'flex', alignItems: 'center', padding: '5px 12px 5px ' + (folders.length > 0 ? '28px' : '12px'), cursor: 'pointer', fontSize: '.76rem', color: n.id === activeId ? 'var(--accent2)' : 'var(--fg)', background: n.id === activeId ? 'rgba(108,99,255,.1)' : 'transparent', fontFamily: 'var(--font)', borderLeft: n.id === activeId ? '2px solid var(--accent)' : '2px solid transparent', position: 'relative' }}
+                    onClick={async () => {
+                      if (noteMenu) { setNoteMenu(null); return; }
+                      if (n.id === activeId) return;
+                      if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
+                      setIsDirty(false); openNote(n.id);
+                    }}
+                  >
+                    {n.pinned && <span style={{ marginRight: 3, fontSize: '.6rem' }}>📌</span>}
+                    <span style={{ marginRight: 4, fontSize: '.65rem' }}>📄</span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{escHTML(n.title || 'Untitled')}</span>
+                    <button
+                      style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '.85rem', cursor: 'pointer', padding: '0 4px', flexShrink: 0, lineHeight: 1 }}
+                      onClick={(e) => { e.stopPropagation(); setNoteMenu(noteMenu === n.id ? null : n.id); }}
+                    >⋮</button>
+                    {noteMenu === n.id && (
+                      <div style={{ position: 'absolute', right: 4, top: 22, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 150, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameNote(n.id)}>✏️ Rename</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => togglePin(n.id)}>{n.pinned ? '📌 Unpin' : '📌 Pin'}</button>
+                        {folders.length > 0 && (<>
+                          <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                          <div style={{ padding: '3px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Move to</div>
+                          {folders.map(ff => (
+                            <button key={ff} style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickMoveToFolder(n.id, ff)}>📁 {ff}</button>
+                          ))}
+                        </>)}
+                        <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickDelete(n.id)}>🗑️ Delete</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {allNotes.length === 0 && (
+                  <div style={{ color: 'var(--muted)', fontSize: '.8rem', padding: 16, textAlign: 'center' }}>
+                    {search ? 'No notes match.' : 'No notes yet.'}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          <div style={{ height: 80 }} />
+        </div>)}
+
+        {/* ── Trash View ── */}
+        {sidebarView === 'trash' && (
+          <ul className="notes-list">
+            {trashNotes.length === 0 && (
+              <li style={{ color: 'var(--muted)', fontSize: '.82rem', padding: 16, textAlign: 'center' }}>
+                Trash is empty.
+              </li>
+            )}
+            {trashNotes.map(n => {
+              const daysLeft = Math.max(0, Math.ceil((7 - (Date.now() - n.deleted_at) / 86400000)));
+              return (
+                <li key={n.id} className="note-item" style={{ opacity: 0.8 }}>
+                  <div className="note-item-title" style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{escHTML(n.title || 'Untitled')}</div>
+                  <div className="note-item-meta">
+                    <span style={{ color: 'var(--danger)', fontSize: '.7rem' }}>{daysLeft}d left</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <button
+                      style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--success)', background: 'rgba(52,211,153,.1)', color: 'var(--success)', fontSize: '.72rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                      onClick={(e) => { e.stopPropagation(); restoreNote(n.id); }}
+                    >♻️ Restore</button>
+                    <button
+                      style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--danger)', background: 'rgba(248,113,113,.1)', color: 'var(--danger)', fontSize: '.72rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                      onClick={(e) => { e.stopPropagation(); permanentDelete(n.id); }}
+                    >🗑️ Delete</button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </aside>
 
       {/* Sidebar overlay (mobile) */}
@@ -819,6 +1283,38 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
       {/* Main */}
       <main className="main">
+        {/* File Tabs Bar */}
+        {openTabs.length > 0 && (
+          <div style={{ display: 'flex', overflowX: 'auto', background: 'var(--bg)', borderBottom: '1px solid var(--border)', minHeight: 32 }}>
+            {openTabs.map(tab => (
+              <div key={tab.id}
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', fontSize: '.75rem', fontFamily: 'var(--font)', cursor: 'pointer', borderRight: '1px solid var(--border)', background: tab.id === activeId ? 'var(--card)' : 'transparent', color: tab.id === activeId ? 'var(--accent2)' : 'var(--muted)', borderBottom: tab.id === activeId ? '2px solid var(--accent)' : '2px solid transparent', whiteSpace: 'nowrap', flexShrink: 0 }}
+                onClick={async () => {
+                  if (tab.id === activeId) return;
+                  if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
+                  setIsDirty(false); openNote(tab.id);
+                }}
+              >
+                <span style={{ fontSize: '.65rem' }}>📄</span>
+                <span>{tab.title || 'Untitled'}</span>
+                <button
+                  style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '.6rem', cursor: 'pointer', padding: '0 2px', lineHeight: 1, opacity: .6 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenTabs(prev => prev.filter(t => t.id !== tab.id));
+                    if (tab.id === activeId) {
+                      const remaining = openTabs.filter(t => t.id !== tab.id);
+                      if (remaining.length > 0) openNote(remaining[remaining.length - 1].id);
+                      else setActiveIdState(null);
+                    }
+                  }}
+                  title="Close tab"
+                >✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Empty state */}
         {!activeId && (
           <div className="empty-state">
@@ -832,17 +1328,32 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         {/* Editor panel */}
         {activeId && (
           <div className="editor-panel" style={{ display: 'flex' }}>
-            <div className="editor-topbar">
-              <input type="text" className="note-title-input" placeholder="Note title…"
-                value={noteTitle} onChange={e => { setNoteTitle(e.target.value); titleRef.current = e.target.value; scheduleSave(); }} />
-              <div className="topbar-actions">
-                <span className="note-date">{noteDate}</span>
-                <button className="btn-icon danger" onClick={deleteNote} title="Delete note">🗑️</button>
+            {/* Title Bar Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid var(--border)', padding: '2px 0', cursor: 'pointer', background: 'var(--card)', userSelect: 'none' }}
+              onClick={() => setTitleBarCollapsed(!titleBarCollapsed)}>
+              <span style={{ fontSize: '.65rem', color: 'var(--muted)', fontFamily: 'var(--font)' }}>
+                {titleBarCollapsed ? '▼ Show Title Bar' : '▲ Hide Title Bar'}
+              </span>
+            </div>
+
+            {/* Title Bar */}
+            {!titleBarCollapsed && (
+              <div className="editor-topbar">
+                <input type="text" className="note-title-input" placeholder="Note title…"
+                  value={noteTitle} onChange={e => { setNoteTitle(e.target.value); titleRef.current = e.target.value; setOpenTabs(prev => prev.map(t => t.id === activeId ? { ...t, title: e.target.value } : t)); scheduleSave(); }} />
               </div>
+            )}
+
+            {/* Toolbar Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid var(--border)', padding: '2px 0', cursor: 'pointer', background: 'var(--card)', userSelect: 'none' }}
+              onClick={() => setToolbarCollapsed(!toolbarCollapsed)}>
+              <span style={{ fontSize: '.65rem', color: 'var(--muted)', fontFamily: 'var(--font)' }}>
+                {toolbarCollapsed ? '▼ Show Toolbar' : '▲ Hide Toolbar'}
+              </span>
             </div>
 
             {/* Toolbar */}
-            <div className="toolbar">
+            <div className="toolbar" style={{ display: toolbarCollapsed ? 'none' : 'flex' }}>
               {[
                 { cmd: 'bold', label: <b>B</b>, title: 'Bold' },
                 { cmd: 'italic', label: <i>I</i>, title: 'Italic' },
@@ -976,7 +1487,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               <button className="tb-btn" title="Insert table" onClick={insertTable}>📊 Table</button>
               <button className="tb-btn" title="Insert code" onClick={insertCode}>{'</>'} Code</button>
               <button className="tb-btn" title="Horizontal rule" onMouseDown={e => { e.preventDefault(); insertHorizontalRule(); }}>─ Line</button>
-              <button className="tb-btn" title="Clear formatting" onMouseDown={e => { e.preventDefault(); execCmd('removeFormat'); }}>✕ Format</button>
+              <button className="tb-btn" title="Clear ALL formatting" onMouseDown={e => { e.preventDefault(); clearAllFormatting(); }}>✕ Format</button>
 
               <span className="tb-divider" />
 
@@ -1111,8 +1622,12 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         </div>
       )}
 
-      {/* Toast */}
-      <div className={`toast ${toast.show ? 'show' : ''}`}>{toast.msg}</div>
+      {/* Toast Queue */}
+      <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', pointerEvents: 'none' }}>
+        {toastQueue.map(t => (
+          <div key={t.id} className="toast show">{t.msg}</div>
+        ))}
+      </div>
 
       {/* Find & Replace Modal */}
       {showFindReplace && (
@@ -1134,6 +1649,104 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 <button className="replace-btn single" onClick={() => findAndReplace(findText, replaceText, false)}>Replace</button>
                 <button className="replace-btn all" onClick={() => findAndReplace(findText, replaceText, true)}>Replace All</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Profile Edit Modal ── */}
+      {showProfileEdit && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font)' }} onClick={() => setShowProfileEdit(false)}>
+          <div style={{ background: 'var(--card)', borderRadius: 16, padding: 28, width: '90%', maxWidth: 420, boxShadow: '0 8px 32px rgba(0,0,0,.4)', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 16px', color: 'var(--fg)', fontSize: '1.1rem' }}>✏️ Edit Profile</h3>
+
+            {/* Avatar + Email (read-only) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 12, borderRadius: 10, background: 'rgba(108,99,255,.06)' }}>
+              <div style={{ width: 48, height: 48, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '1.1rem' }}>
+                {user.avatar ? <img src={user.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user.name || user.email || 'U').charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <div style={{ color: 'var(--fg)', fontSize: '.85rem', fontWeight: 600 }}>{user.email || user.phone || 'No email'}</div>
+                <div style={{ color: 'var(--muted)', fontSize: '.7rem' }}>ID: {user.id?.slice(-8) || '—'}</div>
+              </div>
+            </div>
+
+            {/* Editable fields */}
+            {[
+              { key: 'name', label: 'Full Name', placeholder: 'John Doe' },
+              { key: 'username', label: 'Username', placeholder: 'johndoe' },
+              { key: 'age', label: 'Age', placeholder: '25' },
+              { key: 'role', label: 'Role / Title', placeholder: 'Developer' },
+            ].map(f => (
+              <div key={f.key} style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: '.72rem', color: 'var(--muted)', marginBottom: 3, fontWeight: 600 }}>{f.label}</label>
+                <input
+                  type="text"
+                  value={profileForm[f.key]}
+                  onChange={e => setProfileForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+                  placeholder={f.placeholder}
+                  style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '.82rem', fontFamily: 'var(--font)', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+            ))}
+
+            {/* Auth providers */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: '.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600 }}>Linked Accounts</label>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {(user.auth_providers || []).map(p => (
+                  <span key={p} style={{ padding: '4px 12px', borderRadius: 12, fontSize: '.7rem', fontWeight: 600, background: p === 'google' ? 'rgba(66,133,244,.15)' : p === 'github' ? 'rgba(255,255,255,.1)' : p === 'phone' ? 'rgba(52,211,153,.15)' : 'rgba(108,99,255,.15)', color: p === 'google' ? '#4285f4' : p === 'github' ? 'var(--fg)' : p === 'phone' ? '#34d399' : 'var(--accent2)', border: '1px solid ' + (p === 'google' ? 'rgba(66,133,244,.3)' : p === 'github' ? 'var(--border)' : p === 'phone' ? 'rgba(52,211,153,.3)' : 'rgba(108,99,255,.3)') }}>
+                    ✓ {p === 'google' ? '🔵 Google' : p === 'github' ? '⚫ GitHub' : p === 'phone' ? '📱 Phone' : p === 'email' ? '📧 Email' : p}
+                  </span>
+                ))}
+              </div>
+
+              {/* Link buttons for unlinked providers */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {!(user.auth_providers || []).includes('google') && (
+                  <button onClick={() => { const baseUrl = API.replace('/api', ''); window.location.href = `${baseUrl}/api/auth/google?link_token=${getToken()}`; }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(66,133,244,.3)', background: 'rgba(66,133,244,.08)', color: '#4285f4', fontSize: '.78rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600 }}>
+                    🔵 Link Google Account
+                  </button>
+                )}
+                {!(user.auth_providers || []).includes('github') && (
+                  <button onClick={() => { const baseUrl = API.replace('/api', ''); window.location.href = `${baseUrl}/api/auth/github?link_token=${getToken()}`; }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'rgba(255,255,255,.05)', color: 'var(--fg)', fontSize: '.78rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600 }}>
+                    ⚫ Link GitHub Account
+                  </button>
+                )}
+                {!(user.auth_providers || []).includes('phone') && (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input type="tel" placeholder="+91 9876543210" id="linkPhoneInput"
+                      style={{ flex: 1, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '.8rem', fontFamily: 'var(--font)', outline: 'none' }} />
+                    <button onClick={async () => {
+                      const phone = document.getElementById('linkPhoneInput')?.value?.trim();
+                      if (!phone) { showToastMsg('⚠️ Enter a phone number'); return; }
+                      try {
+                        const updated = await apiFetch('/auth/link/phone', { method: 'POST', body: JSON.stringify({ phone }) });
+                        setUser(updated); localStorage.setItem('nv_user', JSON.stringify(updated));
+                        showToastMsg('📱 Phone linked!');
+                      } catch (e) { showToastMsg('⚠️ ' + (e.message || 'Failed to link phone')); }
+                    }} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(52,211,153,.3)', background: 'rgba(52,211,153,.08)', color: '#34d399', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      📱 Link Phone
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Buttons */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowProfileEdit(false)} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--fg)', fontSize: '.8rem', cursor: 'pointer', fontFamily: 'var(--font)' }}>Cancel</button>
+              <button onClick={async () => {
+                try {
+                  const updated = await apiFetch('/auth/profile', { method: 'PUT', body: JSON.stringify(profileForm) });
+                  setUser(updated);
+                  localStorage.setItem('nv_user', JSON.stringify(updated));
+                  showToastMsg('✅ Profile updated');
+                  setShowProfileEdit(false);
+                } catch { showToastMsg('⚠️ Failed to update profile'); }
+              }} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '.8rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600 }}>Save Changes</button>
             </div>
           </div>
         </div>

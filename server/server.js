@@ -11,6 +11,9 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const helmet = require('helmet');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const { MongoClient } = require('mongodb');
 const cloudinary = require('cloudinary').v2;
 
@@ -37,11 +40,16 @@ if (CLOUD_NAME && CLOUD_KEY && CLOUD_SECRET) {
 
 // ── Main ────────────────────────────────────────────────
 async function main() {
-  // Connect to MongoDB
-  const client = new MongoClient(MONGO_URI);
+  // Connect to MongoDB (with connection pool config)
+  const client = new MongoClient(MONGO_URI, {
+    maxPoolSize: 10,
+    minPoolSize: 2,
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 10000,
+  });
   await client.connect();
   const db = client.db('notevault');
-  console.log('  ✅ Connected to MongoDB Atlas – database: notevault');
+  console.log('  ✅ Connected to MongoDB – database: notevault');
 
   // Create indexes (same as server.py)
   await db.collection('users').createIndex({ email: 1 },    { unique: true, sparse: true });
@@ -49,13 +57,34 @@ async function main() {
   await db.collection('users').createIndex({ oauth_id: 1 }, { sparse: true });
   await db.collection('notes').createIndex({ user_id: 1, modified: -1 });
 
+  // Token blacklist for logout
+  const { initBlacklist } = require('./middleware/auth');
+  initBlacklist(db);
+
   // ── Express App ─────────────────────────────────────
   const app = express();
 
   // Middleware
-  app.use(cors({ origin: '*' }));
+  app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+  app.use(compression());
+
+  const ALLOWED = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  app.use(cors({
+    origin: ALLOWED.length ? ALLOWED : '*',
+    credentials: true,
+  }));
+
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+  // Rate limit auth endpoints (20 requests per 15-min window)
+  app.use('/api/auth/', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attempts — please try again in 15 minutes.' },
+  }));
 
   // ── Health Check (used by frontend to detect local server) ──
   app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
