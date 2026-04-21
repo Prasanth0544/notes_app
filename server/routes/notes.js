@@ -140,13 +140,14 @@ module.exports = function (db) {
     }
   });
 
-  // ── Delete folder (move all notes out + remove folder) ─
+  // ── Delete folder (trash all notes inside + remove folder) ─
   router.delete('/folders/:name', authMiddleware, async (req, res) => {
     try {
       const folderName = decodeURIComponent(req.params.name);
+      // Soft-delete (trash) all notes in this folder
       await notes.updateMany(
-        { user_id: req.userId, folder: folderName },
-        { $set: { folder: '' } }
+        { user_id: req.userId, folder: folderName, deleted_at: null },
+        { $set: { deleted_at: new Date().toISOString(), folder: '' } }
       );
       await userFolders.deleteOne({ user_id: req.userId, name: folderName });
       res.json({ ok: true, folder: folderName });
