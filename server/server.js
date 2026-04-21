@@ -69,8 +69,11 @@ async function main() {
   app.use(compression());
 
   const ALLOWED = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  // Always allow Capacitor WebView origins for mobile APK
+  const CAPACITOR_ORIGINS = ['https://localhost', 'capacitor://localhost', 'http://localhost'];
+  const allOrigins = [...new Set([...ALLOWED, ...CAPACITOR_ORIGINS])];
   app.use(cors({
-    origin: ALLOWED.length ? ALLOWED : '*',
+    origin: ALLOWED.length ? allOrigins : '*',
     credentials: true,
   }));
 
