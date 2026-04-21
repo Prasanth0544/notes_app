@@ -420,7 +420,7 @@ export default function NotesApp() {
   }
 
   async function deleteFolder(folderName) {
-    if (!window.confirm(`Delete folder "${folderName}"? Notes inside will be moved to All Notes.`)) return;
+    if (!window.confirm(`Delete folder "${folderName}"? All notes inside will be moved to Trash.`)) return;
     try {
       await apiFetch(`/notes/folders/${encodeURIComponent(folderName)}`, { method: 'DELETE' });
       showToastMsg(`🗑️ Folder "${folderName}" deleted`);
