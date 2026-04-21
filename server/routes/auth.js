@@ -193,10 +193,10 @@ module.exports = function (db) {
           const { ObjectId } = require('mongodb');
           await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'google' } });
         } catch {}
-        return res.redirect(`/index.html?token=${linkToken}&linked=google`);
+        return res.redirect(`/login?token=${linkToken}&linked=google`);
       }
 
-      const nextPage = user.profile_done ? 'index.html' : 'profile-setup.html';
+      const nextPage = user.profile_done ? 'login' : 'login';
       res.redirect(`/${nextPage}?token=${token}`);
     } catch (err) {
       console.error('Google OAuth error:', err.message);
@@ -260,11 +260,10 @@ module.exports = function (db) {
           const { ObjectId } = require('mongodb');
           await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'github' } });
         } catch {}
-        return res.redirect(`/index.html?token=${linkToken}&linked=github`);
+        return res.redirect(`/login?token=${linkToken}&linked=github`);
       }
 
-      const nextPage = user.profile_done ? 'index.html' : 'profile-setup.html';
-      res.redirect(`/${nextPage}?token=${token}`);
+      res.redirect(`/login?token=${token}`);
     } catch (err) {
       console.error('GitHub OAuth error:', err.message);
       res.redirect('/login.html?error=github_failed');

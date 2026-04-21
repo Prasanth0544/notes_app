@@ -16,7 +16,23 @@ export default function LoginPage() {
     const urlErr = params.get('error');
     if (urlToken) {
       localStorage.setItem('nv_token', urlToken);
-      navigate('/profile-setup');
+      // Fetch profile to decide where to go
+      (async () => {
+        try {
+          const res = await fetch(API + '/auth/me', {
+            headers: { Authorization: 'Bearer ' + urlToken },
+          });
+          if (res.ok) {
+            const user = await res.json();
+            localStorage.setItem('nv_user', JSON.stringify(user));
+            navigate(user.profile_done ? '/' : '/profile-setup');
+          } else {
+            navigate('/profile-setup');
+          }
+        } catch {
+          navigate('/profile-setup');
+        }
+      })();
       return;
     }
     if (urlErr) showToast(`OAuth failed: ${urlErr.replace('_', ' ')}. Check .env config.`);
