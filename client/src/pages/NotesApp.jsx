@@ -1030,6 +1030,20 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
   const filePickerRef = useRef(null);
 
+  // ─── Close library menus on click outside ─────────
+  useEffect(() => {
+    function closeLibMenus(e) {
+      ['bulletLibMenu', 'numberLibMenu'].forEach(id => {
+        const menu = document.getElementById(id);
+        if (menu && menu.style.display === 'block' && !menu.parentElement.contains(e.target)) {
+          menu.style.display = 'none';
+        }
+      });
+    }
+    document.addEventListener('mousedown', closeLibMenus);
+    return () => document.removeEventListener('mousedown', closeLibMenus);
+  }, []);
+
   // ─── RENDER ────────────────────────────────────────
   return (
     <>
@@ -1363,6 +1377,23 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
               <span className="tb-divider" />
 
+              {/* ── Font Family ── */}
+              <select className="tb-select" title="Font family" style={{ width: '110px' }}
+                onChange={e => { if (e.target.value) { execCmd('fontName', e.target.value); } }}
+                defaultValue="">
+                <option value="" disabled>Font ▾</option>
+                <option value="Times New Roman" style={{ fontFamily: 'Times New Roman' }}>Times New Roman</option>
+                <option value="Arial" style={{ fontFamily: 'Arial' }}>Arial</option>
+                <option value="Georgia" style={{ fontFamily: 'Georgia' }}>Georgia</option>
+                <option value="Courier New" style={{ fontFamily: 'Courier New' }}>Courier New</option>
+                <option value="Verdana" style={{ fontFamily: 'Verdana' }}>Verdana</option>
+                <option value="Trebuchet MS" style={{ fontFamily: 'Trebuchet MS' }}>Trebuchet MS</option>
+                <option value="Comic Sans MS" style={{ fontFamily: 'Comic Sans MS' }}>Comic Sans MS</option>
+                <option value="Impact" style={{ fontFamily: 'Impact' }}>Impact</option>
+              </select>
+
+              <span className="tb-divider" />
+
               <button className="tb-btn" title="Superscript" onMouseDown={e => { e.preventDefault(); applySuperscript(); }}>x<sup>²</sup></button>
               <button className="tb-btn" title="Subscript" onMouseDown={e => { e.preventDefault(); applySubscript(); }}>x<sub>₂</sub></button>
 
@@ -1383,8 +1414,92 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
               <span className="tb-divider" />
 
-              <button className="tb-btn" title="Bullet list" onMouseDown={e => { e.preventDefault(); execCmd('insertUnorderedList'); }}>≡ •</button>
-              <button className="tb-btn" title="Numbered list" onMouseDown={e => { e.preventDefault(); execCmd('insertOrderedList'); }}>≡ 1</button>
+              {/* ── Bullet Library Dropdown ── */}
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <button className="tb-btn" title="Bullet list" style={{ fontSize: '.75rem' }}
+                  onMouseDown={e => { e.preventDefault(); document.getElementById('bulletLibMenu').style.display = document.getElementById('bulletLibMenu').style.display === 'block' ? 'none' : 'block'; }}
+                >≡ • ▾</button>
+                <div id="bulletLibMenu" style={{ display: 'none', position: 'absolute', top: '100%', left: 0, zIndex: 9999, background: 'var(--sidebar)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 220, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+                  <div style={{ fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600, marginBottom: 6, padding: '0 4px' }}>Bullet Library</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                    {[
+                      { style: 'disc', icon: '●', label: 'Filled circle' },
+                      { style: 'circle', icon: '○', label: 'Hollow circle' },
+                      { style: 'square', icon: '■', label: 'Square' },
+                      { style: '"◆ "', icon: '◆', label: 'Diamond' },
+                      { style: '"✓ "', icon: '✓', label: 'Checkmark' },
+                      { style: '"➤ "', icon: '➤', label: 'Arrow' },
+                      { style: '"✦ "', icon: '✦', label: 'Star' },
+                      { style: '"– "', icon: '–', label: 'Dash' },
+                    ].map(b => (
+                      <button key={b.icon} title={b.label}
+                        style={{ width: 48, height: 40, border: '1px solid var(--border)', borderRadius: 6, background: 'transparent', color: 'var(--fg)', fontSize: '1.1rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        onMouseDown={e => {
+                          e.preventDefault();
+                          document.getElementById('bulletLibMenu').style.display = 'none';
+                          editorRef.current?.focus({ preventScroll: true });
+                          if (savedRangeRef.current) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(savedRangeRef.current); }
+                          document.execCommand('insertUnorderedList', false);
+                          // Apply bullet style to the closest UL
+                          const sel = window.getSelection();
+                          let node = sel.anchorNode;
+                          while (node && node.tagName !== 'UL') node = node.parentElement;
+                          if (node) node.style.listStyleType = b.style;
+                          scheduleSave();
+                        }}>{b.icon}</button>
+                    ))}
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 6 }}>
+                    <button style={{ width: '100%', padding: '4px 8px', border: 'none', background: 'transparent', color: 'var(--muted)', fontSize: '.7rem', cursor: 'pointer', textAlign: 'left' }}
+                      onMouseDown={e => { e.preventDefault(); document.getElementById('bulletLibMenu').style.display = 'none'; editorRef.current?.focus({ preventScroll: true }); if (savedRangeRef.current) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(savedRangeRef.current); } document.execCommand('insertUnorderedList', false); document.execCommand('insertUnorderedList', false); scheduleSave(); }}>
+                      None (remove bullets)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Numbering Library Dropdown ── */}
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <button className="tb-btn" title="Numbered list" style={{ fontSize: '.75rem' }}
+                  onMouseDown={e => { e.preventDefault(); document.getElementById('numberLibMenu').style.display = document.getElementById('numberLibMenu').style.display === 'block' ? 'none' : 'block'; }}
+                >≡ 1 ▾</button>
+                <div id="numberLibMenu" style={{ display: 'none', position: 'absolute', top: '100%', left: 0, zIndex: 9999, background: 'var(--sidebar)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 280, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+                  <div style={{ fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600, marginBottom: 6, padding: '0 4px' }}>Numbering Library</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+                    {[
+                      { style: 'decimal', lines: ['1.', '2.', '3.'], label: '1. 2. 3.' },
+                      { style: 'upper-roman', lines: ['I.', 'II.', 'III.'], label: 'I. II. III.' },
+                      { style: 'lower-roman', lines: ['i.', 'ii.', 'iii.'], label: 'i. ii. iii.' },
+                      { style: 'upper-alpha', lines: ['A.', 'B.', 'C.'], label: 'A. B. C.' },
+                      { style: 'lower-alpha', lines: ['a.', 'b.', 'c.'], label: 'a. b. c.' },
+                      { style: '"decimal"', lines: ['1)', '2)', '3)'], label: '1) 2) 3)', extra: 'decimal' },
+                    ].map((n, i) => (
+                      <button key={i} title={n.label}
+                        style={{ padding: '6px 4px', border: '1px solid var(--border)', borderRadius: 6, background: 'transparent', color: 'var(--fg)', fontSize: '.65rem', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, minHeight: 50 }}
+                        onMouseDown={e => {
+                          e.preventDefault();
+                          document.getElementById('numberLibMenu').style.display = 'none';
+                          editorRef.current?.focus({ preventScroll: true });
+                          if (savedRangeRef.current) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(savedRangeRef.current); }
+                          document.execCommand('insertOrderedList', false);
+                          const sel = window.getSelection();
+                          let node = sel.anchorNode;
+                          while (node && node.tagName !== 'OL') node = node.parentElement;
+                          if (node) node.style.listStyleType = n.extra || n.style;
+                          scheduleSave();
+                        }}>
+                        {n.lines.map((l, j) => <span key={j} style={{ lineHeight: 1.3 }}>{l} ────</span>)}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 6 }}>
+                    <button style={{ width: '100%', padding: '4px 8px', border: 'none', background: 'transparent', color: 'var(--muted)', fontSize: '.7rem', cursor: 'pointer', textAlign: 'left' }}
+                      onMouseDown={e => { e.preventDefault(); document.getElementById('numberLibMenu').style.display = 'none'; editorRef.current?.focus({ preventScroll: true }); if (savedRangeRef.current) { const s = window.getSelection(); s.removeAllRanges(); s.addRange(savedRangeRef.current); } document.execCommand('insertOrderedList', false); document.execCommand('insertOrderedList', false); scheduleSave(); }}>
+                      None (remove numbering)
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               <span className="tb-divider" />
 
@@ -1555,6 +1670,11 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                   if (directFontSizeRef.current) f.style.fontSize = directFontSizeRef.current + 'pt';
                 });
                 updateWordCount(); ensureTrailingParagraph(); scheduleSave(); 
+              }}
+              onKeyDown={e => {
+                // Ctrl+Up/Down: same as toolbar 📏↑ / 📏↓ buttons
+                if (e.ctrlKey && e.key === 'ArrowUp') { e.preventDefault(); increaseSelectedTextSize(); }
+                if (e.ctrlKey && e.key === 'ArrowDown') { e.preventDefault(); decreaseSelectedTextSize(); }
               }}
               onPaste={e => {
                 const items = e.clipboardData?.items;
