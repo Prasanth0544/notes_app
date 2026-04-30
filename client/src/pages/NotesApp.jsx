@@ -6,8 +6,10 @@ import {
   saveNoteOffline, deleteNoteOffline, trashNoteOffline, restoreNoteOffline,
   permanentDeleteOffline, pinNoteOffline,
   cacheFolders, getOfflineFolders, createFolderOffline, deleteFolderOffline,
-  syncQueue,
+  syncQueue, getLastSync, setLastSync, getStorageEstimate, requestPersistentStorage,
 } from '../offline.js';
+import TabBar from './TabBar.jsx';
+import ProfileModal from './ProfileModal.jsx';
 
 /* ═══════════════════════════════════════════════════════
    NotesApp – Main page (replaces index.html + app.js)
@@ -42,7 +44,6 @@ export default function NotesApp() {
   const [toolbarCollapsed, setToolbarCollapsed] = useState(window.innerWidth < 768);
   const [titleBarCollapsed, setTitleBarCollapsed] = useState(false);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
-  const [profileForm, setProfileForm] = useState({ name: '', username: '', age: '', role: '' });
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [lineSpacing, setLineSpacing] = useState('1.75');
@@ -60,6 +61,7 @@ export default function NotesApp() {
   // Trash & Folders
   const [sidebarView, setSidebarView] = useState('notes'); // 'notes' | 'trash'
   const [trashNotes, setTrashNotes] = useState([]);
+  const [trashFolders, setTrashFolders] = useState([]); // Array of { name, deleted_at, notes: [...] }
   const [folders, setFolders] = useState([]);
   const [activeFolder, setActiveFolder] = useState('');    // '' = all notes
   const [noteFolder, setNoteFolder] = useState('');        // current note's folder
@@ -83,14 +85,17 @@ export default function NotesApp() {
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
 
   useEffect(() => {
+    let selThrottleTimer = null;
     function handleSelection() {
+      if (selThrottleTimer) return; // throttle to ~50ms
+      selThrottleTimer = setTimeout(() => { selThrottleTimer = null; }, 50);
       const sel = window.getSelection();
       if (sel.rangeCount > 0 && editorRef.current && editorRef.current.contains(sel.anchorNode)) {
         savedRangeRef.current = sel.getRangeAt(0);
       }
     }
     document.addEventListener('selectionchange', handleSelection);
-    return () => document.removeEventListener('selectionchange', handleSelection);
+    return () => { document.removeEventListener('selectionchange', handleSelection); clearTimeout(selThrottleTimer); };
   }, []);
 
   // ─── Server Reachability Check ─────────────────────
@@ -123,7 +128,9 @@ export default function NotesApp() {
   }
 
   function escHTML(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-  function stripHTML(h) { const d = document.createElement('div'); d.innerHTML = h; return d.textContent || ''; }
+  // Reuse a single detached element for stripHTML instead of creating one each call
+  const stripHTMLDiv = useRef(document.createElement('div'));
+  function stripHTML(h) { stripHTMLDiv.current.innerHTML = h; return stripHTMLDiv.current.textContent || ''; }
 
   async function apiFetch(path, opts = {}) {
     const res = await fetch(API + path, {
@@ -154,9 +161,20 @@ export default function NotesApp() {
     localStorage.setItem('nv_theme', isLight ? 'light' : 'dark');
   }, [isLight]);
 
-  // ─── Online/Offline detection (ping-based) ────────
+  // ─── Online/Offline detection (adaptive backoff) ───
   useEffect(() => {
     let intervalId;
+    let successCount = 0;
+    function getInterval() {
+      // Exponential backoff: 15s → 30s → 60s after consecutive successes
+      if (successCount >= 8) return 60000;
+      if (successCount >= 4) return 30000;
+      return 15000;
+    }
+    function scheduleNext() {
+      clearInterval(intervalId);
+      intervalId = setTimeout(async () => { await pingServer(); scheduleNext(); }, getInterval());
+    }
     async function pingServer() {
       // Skip polling when the tab is hidden to save bandwidth
       if (document.hidden) return;
@@ -165,6 +183,7 @@ export default function NotesApp() {
         // Was offline, now back online
         isOnlineRef.current = true;
         setIsOnline(true); setShowOfflineBanner(false);
+        successCount = 0;
         await syncQueue(API, getToken());
         // Refresh UI after sync
         loadNotesList('', '').catch(() => {});
@@ -173,22 +192,25 @@ export default function NotesApp() {
         // Was online, server went away
         isOnlineRef.current = false;
         setIsOnline(false); setShowOfflineBanner(true);
+        successCount = 0;
+      } else if (reachable) {
+        successCount++;
+      } else {
+        successCount = 0;
       }
     }
     // Check immediately on mount
-    pingServer();
-    // Poll every 15 seconds (reduced from 5s to save bandwidth)
-    intervalId = setInterval(pingServer, 15000);
+    pingServer().then(scheduleNext);
     // Re-check immediately when tab becomes visible again
-    const onVisibility = () => { if (!document.hidden) pingServer(); };
+    const onVisibility = () => { if (!document.hidden) { pingServer(); scheduleNext(); } };
     document.addEventListener('visibilitychange', onVisibility);
     // Also listen for browser online/offline as a hint to re-check immediately
-    const goOnline = () => pingServer();
-    const goOffline = () => pingServer();
+    const goOnline = () => { pingServer(); scheduleNext(); };
+    const goOffline = () => { pingServer(); scheduleNext(); };
     window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);
     return () => {
-      clearInterval(intervalId);
+      clearTimeout(intervalId);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', goOnline);
       window.removeEventListener('offline', goOffline);
@@ -218,6 +240,7 @@ export default function NotesApp() {
       if (folder) url += `folder=${encodeURIComponent(folder)}&`;
       notes = await apiFetch(url);
       cacheNotes(notes).catch(() => {});
+      setLastSync().catch(() => {}); // track last successful sync timestamp
     } catch (e) {
       if (!e.message.includes('Unauthorized')) {
         // API failed — fall back to offline cache
@@ -298,18 +321,20 @@ export default function NotesApp() {
     }
     setIsDirty(false);
     setSidebarView('notes'); // switch to notes view if in trash
+    // Use activeFolder (sidebar selection) or fall back to the current note's folder
+    const targetFolder = activeFolder || noteFolder;
     try {
-      // Create note in the currently active folder
-      const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [], folder: activeFolder }) });
+      // Create note in the target folder
+      const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [], folder: targetFolder }) });
       cacheNote(note).catch(() => {});
-      await loadNotesList('', activeFolder);
+      await loadNotesList('');
       loadFolders();
       await openNote(note.id);
     } catch {
-      // API failed — create offline
-      const note = await saveNoteOffline(null, 'Untitled Note', '', []);
+      // API failed — create offline (also respects folder context)
+      const note = await saveNoteOffline(null, 'Untitled Note', '', [], targetFolder);
       noteCacheRef.current.set(note.id, note);
-      await loadNotesList('', activeFolder);
+      await loadNotesList('');
       await openNote(note.id);
       showToastMsg('📴 Note created offline — will sync later');
     }
@@ -341,10 +366,13 @@ export default function NotesApp() {
     try {
       const items = await apiFetch('/notes/trash');
       setTrashNotes(items);
+      const trashFols = await apiFetch('/notes/trash/folders');
+      setTrashFolders(trashFols);
     } catch {
       // Offline fallback — show cached trashed notes
       const items = await getOfflineTrash().catch(() => []);
       setTrashNotes(items);
+      setTrashFolders([]); // Offline trash folders not supported yet
     }
   }
 
@@ -373,6 +401,41 @@ export default function NotesApp() {
       showToastMsg('🗑️ Deleted offline — will sync later');
     }
     await loadTrash();
+  }
+
+  async function restoreFolder(folderName) {
+    try {
+      await apiFetch(`/notes/trash/folders/${encodeURIComponent(folderName)}/restore`, { method: 'POST' });
+      showToastMsg(`♻️ Folder "${folderName}" restored`);
+    } catch {
+      showToastMsg('⚠️ Failed to restore folder (offline not supported yet)');
+    }
+    await loadTrash();
+    await loadNotesList(search);
+    loadFolders();
+  }
+
+  async function permanentDeleteFolder(folderName) {
+    if (!window.confirm(`Permanently delete folder "${folderName}" and all its notes? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/notes/trash/folders/${encodeURIComponent(folderName)}/permanent`, { method: 'DELETE' });
+      showToastMsg(`🗑️ Folder "${folderName}" permanently deleted`);
+    } catch {
+      showToastMsg('⚠️ Failed to delete folder (offline not supported yet)');
+    }
+    await loadTrash();
+  }
+
+  async function emptyTrash() {
+    if (!window.confirm('⚠️ Permanently delete ALL items in Trash?\n\nThis will delete all trashed notes and folders. This action cannot be undone.')) return;
+    try {
+      const res = await apiFetch('/notes/trash/empty', { method: 'DELETE' });
+      showToastMsg(`🗑️ Trash emptied — ${res.deleted} item(s) permanently deleted`);
+    } catch {
+      showToastMsg('⚠️ Failed to empty trash');
+    }
+    await loadTrash();
+    loadFolders();
   }
 
   // ─── Folder Operations ────────────────────────────
@@ -411,7 +474,7 @@ export default function NotesApp() {
         body: JSON.stringify({ title: titleRef.current, content: editorRef.current?.innerHTML || '', tags: currentTagsRef.current, folder }),
       });
       setNoteFolder(folder);
-      await loadNotesList(search, activeFolder);
+      await loadNotesList(search);
       loadFolders();
       showToastMsg(folder ? `📁 Moved to "${folder}"` : '📄 Moved to All Notes');
     } catch {
@@ -448,7 +511,7 @@ export default function NotesApp() {
       const note = await pinNoteOffline(noteId).catch(() => null);
       showToastMsg(note?.pinned ? '📌 Pinned offline' : '📌 Unpinned offline');
     }
-    await loadNotesList(search, activeFolder);
+    await loadNotesList(search);
     setNoteMenu(null);
   }
 
@@ -460,7 +523,7 @@ export default function NotesApp() {
         method: 'PUT',
         body: JSON.stringify({ title: note.title, content: note.content || '', tags: note.tags || [], folder }),
       });
-      await loadNotesList(search, activeFolder);
+      await loadNotesList(search);
       loadFolders();
       showToastMsg(folder ? `📁 Moved to "${folder}"` : '📄 Moved to All');
     } catch {
@@ -483,7 +546,7 @@ export default function NotesApp() {
     }
     if (activeIdRef.current === noteId) setActiveIdState(null);
     noteCacheRef.current.delete(noteId);
-    await loadNotesList(search, activeFolder);
+    await loadNotesList(search);
     setNoteMenu(null);
   }
 
@@ -504,7 +567,7 @@ export default function NotesApp() {
     } catch {
       showToastMsg('⚠️ Failed to rename');
     }
-    await loadNotesList(search, activeFolder);
+    await loadNotesList(search);
     setOpenTabs(prev => prev.map(t => t.id === noteId ? { ...t, title: newTitle.trim() } : t));
     setNoteMenu(null);
   }
@@ -525,7 +588,7 @@ export default function NotesApp() {
       else showToastMsg('⚠️ Failed to rename folder');
     }
     await loadFolders();
-    await loadNotesList(search, activeFolder === oldName ? newName.trim() : activeFolder);
+    await loadNotesList(search);
     setFolderMenu(null);
   }
 
@@ -569,14 +632,18 @@ export default function NotesApp() {
     }
   }, []);
 
+  const lastSavedTitleRef = useRef('');
   function scheduleSave() {
     setIsDirty(true);
     setSaveStatus('pending');
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       await saveCurrentNote();
-      // Refresh sidebar if title/tags changed
-      loadNotesList(search);
+      // Only refresh sidebar if the title actually changed (skip on content-only saves)
+      if (titleRef.current !== lastSavedTitleRef.current) {
+        lastSavedTitleRef.current = titleRef.current;
+        loadNotesList(search);
+      }
     }, 900);
   }
 
@@ -593,6 +660,7 @@ export default function NotesApp() {
   }
 
   // ─── Word Count & Statistics ───────────────────
+  const wordCountTimerRef = useRef(null);
   function updateWordCount() {
     if (!editorRef.current) return;
     const text = (editorRef.current.innerText || '').trim();
@@ -603,6 +671,21 @@ export default function NotesApp() {
     const readTime = Math.max(1, Math.round(words / 200)); // avg 200 words per minute
     setWordCount(`${words} word${words !== 1 ? 's' : ''} · ${chars} chars`);
     setDocStats({ words, chars, sentences: Math.max(0, sentences), paragraphs: Math.max(1, paragraphs), readTime: `${readTime} min` });
+  }
+  function debouncedUpdateWordCount() {
+    clearTimeout(wordCountTimerRef.current);
+    wordCountTimerRef.current = setTimeout(updateWordCount, 500);
+  }
+
+  // Debounced font-size DOM query for custom sizes
+  const fontQueryTimerRef = useRef(null);
+  function debouncedFontQuery() {
+    clearTimeout(fontQueryTimerRef.current);
+    fontQueryTimerRef.current = setTimeout(() => {
+      document.querySelectorAll('font[size="7"]:not([data-old="1"])').forEach(f => {
+        if (directFontSizeRef.current) f.style.fontSize = directFontSizeRef.current + 'pt';
+      });
+    }, 200);
   }
 
   // ─── Find & Replace ───────────────────────────────
@@ -999,17 +1082,27 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         showToastMsg(`✅ ${linked.charAt(0).toUpperCase() + linked.slice(1)} account linked!`);
         window.history.replaceState({}, '', window.location.pathname);
       }
+      let loadedNotes = [];
       await Promise.all([loadUserProfile(), loadFolders(), loadNotesList().then(notes => {
+        loadedNotes = notes;
         if (notes.length > 0) openNote(notes[0].id);
       })]);
-      // Background prefetch (try API, silently skip on failure)
+      // Request persistent storage to prevent browser eviction
+      requestPersistentStorage().catch(() => {});
+      // Log storage usage for diagnostics
+      getStorageEstimate().then(est => {
+        if (est && est.percentUsed > 80) {
+          console.warn(`⚠️ IndexedDB storage: ${est.usedMB}MB / ${est.totalMB}MB (${est.percentUsed}%)`);
+        }
+      }).catch(() => {});
+      // Background prefetch using resolved notes (not stale allNotes state)
       setTimeout(async () => {
-        const notes = noteCacheRef.current;
-        for (const n of allNotes.slice(1)) {
-          if (!notes.has(n.id)) {
+        const cache = noteCacheRef.current;
+        for (const n of loadedNotes.slice(1)) {
+          if (!cache.has(n.id)) {
             try {
               const full = await apiFetch(`/notes/${n.id}`);
-              notes.set(n.id, full);
+              cache.set(n.id, full);
               cacheNote(full).catch(() => {});
             } catch { break; } // stop prefetch if server unreachable
           }
@@ -1086,7 +1179,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
             </div>
             <div className="user-dropdown">
               <button className="dropdown-item" style={{ color: 'var(--fg)' }}
-                onClick={(e) => { e.stopPropagation(); setProfileForm({ name: user.name || '', username: user.username || '', age: user.age || '', role: user.role || '' }); setShowProfileEdit(true); }}>
+                onClick={(e) => { e.stopPropagation(); setShowProfileEdit(true); }}>
                 <span className="dropdown-icon">✏️</span> Edit Details
               </button>
               <button className="dropdown-item danger" id="btnLogout"
@@ -1107,7 +1200,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)' }}>
           <button
             style={{ flex: 1, padding: '8px 0', background: sidebarView === 'notes' ? 'var(--card)' : 'transparent', border: 'none', borderBottom: sidebarView === 'notes' ? '2px solid var(--accent)' : '2px solid transparent', color: sidebarView === 'notes' ? 'var(--accent2)' : 'var(--muted)', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
-            onClick={() => { setSidebarView('notes'); loadNotesList(search, activeFolder); }}
+            onClick={() => { setSidebarView('notes'); loadNotesList(search); }}
           >📝 Notes</button>
           <button
             style={{ flex: 1, padding: '8px 0', background: sidebarView === 'trash' ? 'var(--card)' : 'transparent', border: 'none', borderBottom: sidebarView === 'trash' ? '2px solid var(--danger)' : '2px solid transparent', color: sidebarView === 'trash' ? 'var(--danger)' : 'var(--muted)', fontSize: '.78rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
@@ -1172,7 +1265,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                       if (noteMenu) { setNoteMenu(null); return; }
                       if (n.id === activeId) return;
                       if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
-                      setIsDirty(false); openNote(n.id);
+                      setIsDirty(false); setActiveFolder(f); openNote(n.id);
                     }}
                   >
                     {n.pinned && <span style={{ marginRight: 3, fontSize: '.6rem' }}>📌</span>}
@@ -1220,7 +1313,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                       if (noteMenu) { setNoteMenu(null); return; }
                       if (n.id === activeId) return;
                       if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
-                      setIsDirty(false); openNote(n.id);
+                      setIsDirty(false); setActiveFolder(''); openNote(n.id);
                     }}
                   >
                     {n.pinned && <span style={{ marginRight: 3, fontSize: '.6rem' }}>📌</span>}
@@ -1260,34 +1353,95 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
         {/* ── Trash View ── */}
         {sidebarView === 'trash' && (
-          <ul className="notes-list">
-            {trashNotes.length === 0 && (
-              <li style={{ color: 'var(--muted)', fontSize: '.82rem', padding: 16, textAlign: 'center' }}>
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+            {trashNotes.length === 0 && trashFolders.length === 0 && (
+              <div style={{ color: 'var(--muted)', fontSize: '.82rem', padding: 16, textAlign: 'center' }}>
                 Trash is empty.
-              </li>
+              </div>
             )}
-            {trashNotes.map(n => {
-              const daysLeft = Math.max(0, Math.ceil((7 - (Date.now() - n.deleted_at) / 86400000)));
+
+            {/* Empty Trash button */}
+            {(trashNotes.length > 0 || trashFolders.length > 0) && (
+              <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+                <button
+                  style={{ width: '100%', padding: '6px 12px', borderRadius: 6, border: '1px solid var(--danger)', background: 'rgba(248,113,113,.1)', color: 'var(--danger)', fontSize: '.75rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                  onClick={emptyTrash}
+                >🗑️ Empty Trash</button>
+              </div>
+            )}
+
+            {/* Render Trashed Folders */}
+            {trashFolders.map(tf => {
+              const daysLeft = Math.max(0, Math.ceil((7 - (Date.now() - new Date(tf.deleted_at).getTime()) / 86400000)));
+              const isCollapsed = collapsedFolders.has(`trash_${tf.name}`);
               return (
-                <li key={n.id} className="note-item" style={{ opacity: 0.8 }}>
-                  <div className="note-item-title" style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{escHTML(n.title || 'Untitled')}</div>
-                  <div className="note-item-meta">
-                    <span style={{ color: 'var(--danger)', fontSize: '.7rem' }}>{daysLeft}d left</span>
+                <div key={`trash_folder_${tf.name}`} style={{ marginBottom: 4 }}>
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', padding: '6px 12px', cursor: 'pointer', fontSize: '.78rem', fontWeight: 600, color: 'var(--muted)', fontFamily: 'var(--font)', borderBottom: '1px solid rgba(255,255,255,.04)', userSelect: 'none', position: 'relative', opacity: 0.8 }}
+                    onClick={() => {
+                      setCollapsedFolders(prev => {
+                        const next = new Set(prev);
+                        const key = `trash_${tf.name}`;
+                        next.has(key) ? next.delete(key) : next.add(key);
+                        return next;
+                      });
+                    }}
+                  >
+                    <span style={{ marginRight: 6, opacity: 0.6 }}>{isCollapsed ? '▶' : '▼'}</span>
+                    <span style={{ textDecoration: 'line-through' }}>📁 {escHTML(tf.name)}</span>
+                    <span style={{ marginLeft: 'auto', color: 'var(--danger)', fontSize: '.65rem' }}>{daysLeft}d left</span>
                   </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <button
-                      style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--success)', background: 'rgba(52,211,153,.1)', color: 'var(--success)', fontSize: '.72rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
-                      onClick={(e) => { e.stopPropagation(); restoreNote(n.id); }}
-                    >♻️ Restore</button>
-                    <button
-                      style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--danger)', background: 'rgba(248,113,113,.1)', color: 'var(--danger)', fontSize: '.72rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
-                      onClick={(e) => { e.stopPropagation(); permanentDelete(n.id); }}
-                    >🗑️ Delete</button>
-                  </div>
-                </li>
+                  {!isCollapsed && (
+                    <div style={{ padding: '4px 12px', background: 'rgba(0,0,0,0.05)' }}>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                        <button
+                          style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--success)', background: 'rgba(52,211,153,.1)', color: 'var(--success)', fontSize: '.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                          onClick={(e) => { e.stopPropagation(); restoreFolder(tf.name); }}
+                        >♻️ Restore Folder</button>
+                        <button
+                          style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--danger)', background: 'rgba(248,113,113,.1)', color: 'var(--danger)', fontSize: '.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                          onClick={(e) => { e.stopPropagation(); permanentDeleteFolder(tf.name); }}
+                        >🗑️ Delete Folder</button>
+                      </div>
+                      <ul className="notes-list" style={{ marginLeft: 12 }}>
+                        {tf.notes.map(n => (
+                          <li key={n.id} className="note-item" style={{ opacity: 0.7, padding: '8px', borderLeft: '2px solid var(--border)', borderRadius: 0 }}>
+                            <div className="note-item-title" style={{ textDecoration: 'line-through', fontSize: '.8rem' }}>{escHTML(n.title || 'Untitled')}</div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               );
             })}
-          </ul>
+
+            {/* Render Standalone Trashed Notes (notes whose folder is NOT in trashFolders) */}
+            <ul className="notes-list">
+              {trashNotes.filter(n => !trashFolders.some(tf => tf.name === n.folder)).map(n => {
+                const daysLeft = Math.max(0, Math.ceil((7 - (Date.now() - new Date(n.deleted_at).getTime()) / 86400000)));
+                return (
+                  <li key={n.id} className="note-item" style={{ opacity: 0.8 }}>
+                    <div className="note-item-title" style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{escHTML(n.title || 'Untitled')}</div>
+                    {n.folder && <div style={{ fontSize: '.7rem', color: 'var(--muted)', marginTop: 2 }}>Folder: {escHTML(n.folder)}</div>}
+                    <div className="note-item-meta">
+                      <span style={{ color: 'var(--danger)', fontSize: '.7rem' }}>{daysLeft}d left</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                      <button
+                        style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--success)', background: 'rgba(52,211,153,.1)', color: 'var(--success)', fontSize: '.72rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                        onClick={(e) => { e.stopPropagation(); restoreNote(n.id); }}
+                      >♻️ Restore</button>
+                      <button
+                        style={{ flex: 1, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--danger)', background: 'rgba(248,113,113,.1)', color: 'var(--danger)', fontSize: '.72rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}
+                        onClick={(e) => { e.stopPropagation(); permanentDelete(n.id); }}
+                      >🗑️ Delete</button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         )}
       </aside>
 
@@ -1298,36 +1452,23 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
       {/* Main */}
       <main className="main">
         {/* File Tabs Bar */}
-        {openTabs.length > 0 && (
-          <div style={{ display: 'flex', overflowX: 'auto', background: 'var(--bg)', borderBottom: '1px solid var(--border)', minHeight: 32 }}>
-            {openTabs.map(tab => (
-              <div key={tab.id}
-                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', fontSize: '.75rem', fontFamily: 'var(--font)', cursor: 'pointer', borderRight: '1px solid var(--border)', background: tab.id === activeId ? 'var(--card)' : 'transparent', color: tab.id === activeId ? 'var(--accent2)' : 'var(--muted)', borderBottom: tab.id === activeId ? '2px solid var(--accent)' : '2px solid transparent', whiteSpace: 'nowrap', flexShrink: 0 }}
-                onClick={async () => {
-                  if (tab.id === activeId) return;
-                  if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
-                  setIsDirty(false); openNote(tab.id);
-                }}
-              >
-                <span style={{ fontSize: '.65rem' }}>📄</span>
-                <span>{tab.title || 'Untitled'}</span>
-                <button
-                  style={{ background: 'none', border: 'none', color: 'var(--muted)', fontSize: '.6rem', cursor: 'pointer', padding: '0 2px', lineHeight: 1, opacity: .6 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenTabs(prev => prev.filter(t => t.id !== tab.id));
-                    if (tab.id === activeId) {
-                      const remaining = openTabs.filter(t => t.id !== tab.id);
-                      if (remaining.length > 0) openNote(remaining[remaining.length - 1].id);
-                      else setActiveIdState(null);
-                    }
-                  }}
-                  title="Close tab"
-                >✕</button>
-              </div>
-            ))}
-          </div>
-        )}
+        <TabBar
+          openTabs={openTabs}
+          activeId={activeId}
+          onSwitchTab={async (tabId) => {
+            if (tabId === activeId) return;
+            if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
+            setIsDirty(false); openNote(tabId);
+          }}
+          onCloseTab={(tabId) => {
+            setOpenTabs(prev => prev.filter(t => t.id !== tabId));
+            if (tabId === activeId) {
+              const remaining = openTabs.filter(t => t.id !== tabId);
+              if (remaining.length > 0) openNote(remaining[remaining.length - 1].id);
+              else setActiveIdState(null);
+            }
+          }}
+        />
 
         {/* Empty state */}
         {!activeId && (
@@ -1666,10 +1807,8 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 }
               }}
               onInput={() => {
-                document.querySelectorAll('font[size="7"]:not([data-old="1"])').forEach(f => {
-                  if (directFontSizeRef.current) f.style.fontSize = directFontSizeRef.current + 'pt';
-                });
-                updateWordCount(); ensureTrailingParagraph(); scheduleSave(); 
+                debouncedFontQuery();
+                debouncedUpdateWordCount(); ensureTrailingParagraph(); scheduleSave(); 
               }}
               onKeyDown={e => {
                 // Ctrl+Up/Down: same as toolbar 📏↑ / 📏↓ buttons
@@ -1776,100 +1915,28 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
       {/* ── Profile Edit Modal ── */}
       {showProfileEdit && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font)' }} onClick={() => setShowProfileEdit(false)}>
-          <div style={{ background: 'var(--card)', borderRadius: 16, padding: 28, width: '90%', maxWidth: 420, boxShadow: '0 8px 32px rgba(0,0,0,.4)', border: '1px solid var(--border)' }} onClick={e => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 16px', color: 'var(--fg)', fontSize: '1.1rem' }}>✏️ Edit Profile</h3>
-
-            {/* Avatar + Email (read-only) */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 12, borderRadius: 10, background: 'rgba(108,99,255,.06)' }}>
-              <div style={{ width: 48, height: 48, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '1.1rem' }}>
-                {user.avatar ? <img src={user.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user.name || user.email || 'U').charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <div style={{ color: 'var(--fg)', fontSize: '.85rem', fontWeight: 600 }}>{user.email || user.phone || 'No email'}</div>
-                <div style={{ color: 'var(--muted)', fontSize: '.7rem' }}>ID: {user.id?.slice(-8) || '—'}</div>
-              </div>
-            </div>
-
-            {/* Editable fields */}
-            {[
-              { key: 'name', label: 'Full Name', placeholder: 'John Doe' },
-              { key: 'username', label: 'Username', placeholder: 'johndoe' },
-              { key: 'age', label: 'Age', placeholder: '25' },
-              { key: 'role', label: 'Role / Title', placeholder: 'Developer' },
-            ].map(f => (
-              <div key={f.key} style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: '.72rem', color: 'var(--muted)', marginBottom: 3, fontWeight: 600 }}>{f.label}</label>
-                <input
-                  type="text"
-                  value={profileForm[f.key]}
-                  onChange={e => setProfileForm(prev => ({ ...prev, [f.key]: e.target.value }))}
-                  placeholder={f.placeholder}
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '.82rem', fontFamily: 'var(--font)', outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-            ))}
-
-            {/* Auth providers */}
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: 'block', fontSize: '.72rem', color: 'var(--muted)', marginBottom: 6, fontWeight: 600 }}>Linked Accounts</label>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                {(user.auth_providers || []).map(p => (
-                  <span key={p} style={{ padding: '4px 12px', borderRadius: 12, fontSize: '.7rem', fontWeight: 600, background: p === 'google' ? 'rgba(66,133,244,.15)' : p === 'github' ? 'rgba(255,255,255,.1)' : p === 'phone' ? 'rgba(52,211,153,.15)' : 'rgba(108,99,255,.15)', color: p === 'google' ? '#4285f4' : p === 'github' ? 'var(--fg)' : p === 'phone' ? '#34d399' : 'var(--accent2)', border: '1px solid ' + (p === 'google' ? 'rgba(66,133,244,.3)' : p === 'github' ? 'var(--border)' : p === 'phone' ? 'rgba(52,211,153,.3)' : 'rgba(108,99,255,.3)') }}>
-                    ✓ {p === 'google' ? '🔵 Google' : p === 'github' ? '⚫ GitHub' : p === 'phone' ? '📱 Phone' : p === 'email' ? '📧 Email' : p}
-                  </span>
-                ))}
-              </div>
-
-              {/* Link buttons for unlinked providers */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {!(user.auth_providers || []).includes('google') && (
-                  <button onClick={() => { const baseUrl = API.replace('/api', ''); window.location.href = `${baseUrl}/api/auth/google?link_token=${getToken()}`; }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(66,133,244,.3)', background: 'rgba(66,133,244,.08)', color: '#4285f4', fontSize: '.78rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600 }}>
-                    🔵 Link Google Account
-                  </button>
-                )}
-                {!(user.auth_providers || []).includes('github') && (
-                  <button onClick={() => { const baseUrl = API.replace('/api', ''); window.location.href = `${baseUrl}/api/auth/github?link_token=${getToken()}`; }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--border)', background: 'rgba(255,255,255,.05)', color: 'var(--fg)', fontSize: '.78rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600 }}>
-                    ⚫ Link GitHub Account
-                  </button>
-                )}
-                {!(user.auth_providers || []).includes('phone') && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <input type="tel" placeholder="+91 9876543210" id="linkPhoneInput"
-                      style={{ flex: 1, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '.8rem', fontFamily: 'var(--font)', outline: 'none' }} />
-                    <button onClick={async () => {
-                      const phone = document.getElementById('linkPhoneInput')?.value?.trim();
-                      if (!phone) { showToastMsg('⚠️ Enter a phone number'); return; }
-                      try {
-                        const updated = await apiFetch('/auth/link/phone', { method: 'POST', body: JSON.stringify({ phone }) });
-                        setUser(updated); localStorage.setItem('nv_user', JSON.stringify(updated));
-                        showToastMsg('📱 Phone linked!');
-                      } catch (e) { showToastMsg('⚠️ ' + (e.message || 'Failed to link phone')); }
-                    }} style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(52,211,153,.3)', background: 'rgba(52,211,153,.08)', color: '#34d399', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      📱 Link Phone
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Buttons */}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowProfileEdit(false)} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: 'var(--fg)', fontSize: '.8rem', cursor: 'pointer', fontFamily: 'var(--font)' }}>Cancel</button>
-              <button onClick={async () => {
-                try {
-                  const updated = await apiFetch('/auth/profile', { method: 'PUT', body: JSON.stringify(profileForm) });
-                  setUser(updated);
-                  localStorage.setItem('nv_user', JSON.stringify(updated));
-                  showToastMsg('✅ Profile updated');
-                  setShowProfileEdit(false);
-                } catch { showToastMsg('⚠️ Failed to update profile'); }
-              }} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '.8rem', cursor: 'pointer', fontFamily: 'var(--font)', fontWeight: 600 }}>Save Changes</button>
-            </div>
-          </div>
-        </div>
+        <ProfileModal
+          user={user}
+          API={API}
+          getToken={getToken}
+          onClose={() => setShowProfileEdit(false)}
+          onSave={async (formData) => {
+            try {
+              const updated = await apiFetch('/auth/profile', { method: 'PUT', body: JSON.stringify(formData) });
+              setUser(updated);
+              localStorage.setItem('nv_user', JSON.stringify(updated));
+              showToastMsg('✅ Profile updated');
+              setShowProfileEdit(false);
+            } catch { showToastMsg('⚠️ Failed to update profile'); }
+          }}
+          onLinkPhone={async (phone) => {
+            try {
+              const updated = await apiFetch('/auth/link/phone', { method: 'POST', body: JSON.stringify({ phone }) });
+              setUser(updated); localStorage.setItem('nv_user', JSON.stringify(updated));
+              showToastMsg('📱 Phone linked!');
+            } catch (e) { showToastMsg('⚠️ ' + (e.message || 'Failed to link phone')); }
+          }}
+        />
       )}
     </>
   );

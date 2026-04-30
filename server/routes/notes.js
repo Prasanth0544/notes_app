@@ -37,9 +37,14 @@ function cleanContent(html) {
 
 module.exports = function (db) {
   const notes = db.collection('notes');
+  const userFolders = db.collection('user_folders');
 
-  // ── Helper: auto-purge notes trashed > 7 days ─────
+  // ── Helper: auto-purge notes trashed > 7 days (throttled) ──
+  const lastPurge = new Map();
   async function autoPurgeTrash(userId) {
+    const now = Date.now();
+    if (now - (lastPurge.get(userId) || 0) < 60000) return; // once per minute per user
+    lastPurge.set(userId, now);
     const cutoff = nowMs() - SEVEN_DAYS_MS;
     await notes.deleteMany({
       user_id: userId,
@@ -50,7 +55,7 @@ module.exports = function (db) {
   // ── List notes (exclude trashed) ──────────────────
   router.get('/', authMiddleware, async (req, res) => {
     try {
-      // Auto-purge expired trash on each list request
+      // Auto-purge expired trash (throttled: once per minute per user)
       await autoPurgeTrash(req.userId);
 
       const q = (req.query.q || '').trim();
@@ -111,12 +116,84 @@ module.exports = function (db) {
     }
   });
 
-  const userFolders = db.collection('user_folders');
+  // ── List trashed folders (folders deleted as a unit) ──
+  router.get('/trash/folders', authMiddleware, async (req, res) => {
+    try {
+      // Get all folders that have been soft-deleted (have deleted_at)
+      const trashedFolders = await userFolders
+        .find({ user_id: req.userId, deleted_at: { $exists: true } })
+        .sort({ deleted_at: -1 })
+        .toArray();
 
-  // ── List folders ──────────────────────────────────
+      // For each trashed folder, fetch its trashed notes
+      const result = [];
+      for (const f of trashedFolders) {
+        const folderNotes = await notes.find(
+          { user_id: req.userId, folder: f.name, deleted_at: { $exists: true } },
+          { projection: { title: 1, tags: 1, created: 1, modified: 1, deleted_at: 1 } }
+        ).toArray();
+        result.push({
+          name:       f.name,
+          deleted_at: f.deleted_at,
+          notes:      folderNotes.map(d => ({
+            id:         String(d._id),
+            title:      d.title || 'Untitled Note',
+            tags:       d.tags || [],
+            created:    d.created || 0,
+            modified:   d.modified || 0,
+            deleted_at: d.deleted_at,
+          })),
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      console.error('List trash folders error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // ── Restore trashed folder + its notes ───────────
+  router.post('/trash/folders/:name/restore', authMiddleware, async (req, res) => {
+    try {
+      const folderName = decodeURIComponent(req.params.name);
+      // Restore the folder record
+      await userFolders.updateOne(
+        { user_id: req.userId, name: folderName },
+        { $unset: { deleted_at: '' } }
+      );
+      // Restore all notes that were in this folder
+      await notes.updateMany(
+        { user_id: req.userId, folder: folderName, deleted_at: { $exists: true } },
+        { $unset: { deleted_at: '' } }
+      );
+      res.json({ ok: true, folder: folderName });
+    } catch (err) {
+      console.error('Restore trash folder error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // ── Permanently delete trashed folder + its notes ─
+  router.delete('/trash/folders/:name/permanent', authMiddleware, async (req, res) => {
+    try {
+      const folderName = decodeURIComponent(req.params.name);
+      // Permanently remove the folder record
+      await userFolders.deleteOne({ user_id: req.userId, name: folderName });
+      // Permanently delete all notes in this folder from trash
+      const result = await notes.deleteMany(
+        { user_id: req.userId, folder: folderName, deleted_at: { $exists: true } }
+      );
+      res.json({ ok: true, folder: folderName, deletedNotes: result.deletedCount });
+    } catch (err) {
+      console.error('Permanent delete trash folder error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // ── List folders (exclude soft-deleted ones) ──────
   router.get('/folders', authMiddleware, async (req, res) => {
     try {
-      const docs = await userFolders.find({ user_id: req.userId }).sort({ name: 1 }).toArray();
+      const docs = await userFolders.find({ user_id: req.userId, deleted_at: { $exists: false } }).sort({ name: 1 }).toArray();
       res.json(docs.map(d => d.name));
     } catch (err) {
       console.error('List folders error:', err);
@@ -140,16 +217,21 @@ module.exports = function (db) {
     }
   });
 
-  // ── Delete folder (trash all notes inside + remove folder) ─
+  // ── Delete folder (soft-trash folder + its notes, preserve folder name) ─
   router.delete('/folders/:name', authMiddleware, async (req, res) => {
     try {
       const folderName = decodeURIComponent(req.params.name);
-      // Soft-delete (trash) all notes in this folder
+      const deletedAt = nowMs();
+      // Soft-delete (trash) all notes in this folder — KEEP the folder field intact
       await notes.updateMany(
-        { user_id: req.userId, folder: folderName, deleted_at: null },
-        { $set: { deleted_at: new Date().toISOString(), folder: '' } }
+        { user_id: req.userId, folder: folderName, deleted_at: { $exists: false } },
+        { $set: { deleted_at: deletedAt } }
       );
-      await userFolders.deleteOne({ user_id: req.userId, name: folderName });
+      // Mark the folder itself as deleted (soft-delete) instead of removing it
+      await userFolders.updateOne(
+        { user_id: req.userId, name: folderName },
+        { $set: { deleted_at: deletedAt } }
+      );
       res.json({ ok: true, folder: folderName });
     } catch (err) {
       console.error('Delete folder error:', err);
@@ -204,21 +286,15 @@ module.exports = function (db) {
       let title = req.body.title || 'Untitled Note';
       const folder = req.body.folder || '';
       
-      // Generate sequential untitled names
+      // Generate sequential untitled names (single aggregation instead of N queries)
       if (title === 'Untitled Note' || title === 'Untitled') {
-        let nextNum = 1;
-        let isUnique = false;
-        
-        while (!isUnique) {
-          const candidateTitle = `Untitled ${nextNum}`;
-          const existing = await notes.findOne({ user_id: req.userId, title: candidateTitle, deleted_at: { $exists: false } });
-          if (!existing) {
-            title = candidateTitle;
-            isUnique = true;
-          } else {
-            nextNum++;
-          }
-        }
+        const [last] = await notes.aggregate([
+          { $match: { user_id: req.userId, title: { $regex: /^Untitled \d+$/ }, deleted_at: { $exists: false } } },
+          { $project: { num: { $toInt: { $arrayElemAt: [{ $split: ['$title', ' '] }, 1] } } } },
+          { $sort: { num: -1 } },
+          { $limit: 1 },
+        ]).toArray();
+        title = `Untitled ${(last?.num || 0) + 1}`;
       } else {
         const existing = await notes.findOne({ user_id: req.userId, title: title, deleted_at: { $exists: false } });
         if (existing) {
@@ -259,9 +335,13 @@ module.exports = function (db) {
       }
       
       const ts = nowMs();
+      // Only re-sanitize content if it actually changed (avoid expensive parse on every auto-save)
+      const incomingContent = req.body.content || '';
+      const currentDoc = await notes.findOne({ _id: noteId, user_id: req.userId }, { projection: { content: 1 } });
+      const contentChanged = !currentDoc || currentDoc.content !== incomingContent;
       const updateFields = {
         title:    title,
-        content:  cleanContent(req.body.content || ''),
+        content:  contentChanged ? cleanContent(incomingContent) : incomingContent,
         tags:     req.body.tags || [],
         modified: ts,
       };
@@ -343,6 +423,24 @@ module.exports = function (db) {
       res.json({ ok: true, deleted: result.deletedCount });
     } catch (err) {
       res.status(400).json({ error: 'Invalid ID' });
+    }
+  });
+  // ── Empty entire trash ─────────────────────────────
+  router.delete('/trash/empty', authMiddleware, async (req, res) => {
+    try {
+      const result = await notes.deleteMany({
+        user_id: req.userId,
+        deleted_at: { $exists: true },
+      });
+      // Also remove any trashed folders
+      await userFolders.deleteMany({
+        user_id: req.userId,
+        deleted_at: { $exists: true },
+      });
+      res.json({ ok: true, deleted: result.deletedCount });
+    } catch (err) {
+      console.error('Empty trash error:', err);
+      res.status(500).json({ error: 'Server error' });
     }
   });
 

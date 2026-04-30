@@ -8,6 +8,8 @@ export default function LoginPage() {
   const [activeTab, setActiveTab] = useState('email');
   const [isLogin, setIsLogin] = useState(true);
   const [toast, setToast] = useState({ msg: '', isError: true, show: false });
+  const [otpStep, setOtpStep] = useState(false);
+  const [otpEmail, setOtpEmail] = useState('');
 
   // ── Check URL token (from OAuth redirect) ──────────
   useEffect(() => {
@@ -82,12 +84,45 @@ export default function LoginPage() {
   async function handleEmailRegister(e) {
     e.preventDefault();
     const form = e.target;
-    const { ok, data } = await authFetch('/auth/register', {
-      name: form.name.value.trim(),
-      email: form.email.value.trim(),
-      password: form.password.value,
+    const name = form.name.value.trim();
+    const email = form.email.value.trim();
+    const password = form.password.value;
+
+    const { ok, data } = await authFetch('/auth/register/send-otp', {
+      name, email, password
     });
-    if (!ok) return showToast(data.error || 'Registration failed');
+
+    if (ok) {
+      setOtpEmail(email);
+      setOtpStep(true);
+      showToast('✉️ Verification code sent!', false);
+      return;
+    }
+
+    // Fallback if SMTP is not configured on the server
+    if (data && data.error && data.error.includes('SMTP not configured')) {
+      const fb = await authFetch('/auth/register', { name, email, password });
+      if (!fb.ok) return showToast(fb.data?.error || 'Registration failed');
+      handleAuthSuccess(fb.data);
+      return;
+    }
+
+    showToast(data.error || 'Registration failed');
+  }
+
+  async function handleVerifyOtp(e) {
+    e.preventDefault();
+    const form = e.target;
+    const otp = form.otp.value.trim();
+    
+    if (otp.length !== 6) return showToast('Please enter the 6-digit code');
+
+    const { ok, data } = await authFetch('/auth/register/verify-otp', {
+      email: otpEmail,
+      otp
+    });
+
+    if (!ok) return showToast(data.error || 'Verification failed');
     handleAuthSuccess(data);
   }
 
@@ -139,7 +174,7 @@ export default function LoginPage() {
           <div className="tab-strip">
             {['email', 'phone', 'oauth'].map(tab => (
               <button key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`}
-                onClick={() => { setActiveTab(tab); setToast({ ...toast, show: false }); }}>
+                onClick={() => { setActiveTab(tab); setToast({ ...toast, show: false }); setOtpStep(false); }}>
                 {tab === 'email' ? '✉ Email' : tab === 'phone' ? '📱 Phone' : '🔗 Social'}
               </button>
             ))}
@@ -149,14 +184,30 @@ export default function LoginPage() {
           {activeTab === 'email' && (
             <div>
               <div className="subtoggle">
-                <button className={`stab ${isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(true); setToast({ ...toast, show: false }); }}>Sign In</button>
-                <button className={`stab ${!isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(false); setToast({ ...toast, show: false }); }}>Create Account</button>
+                <button className={`stab ${isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(true); setToast({ ...toast, show: false }); setOtpStep(false); }}>Sign In</button>
+                <button className={`stab ${!isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(false); setToast({ ...toast, show: false }); setOtpStep(false); }}>Create Account</button>
               </div>
               {isLogin ? (
                 <form className="auth-form" onSubmit={handleEmailLogin} autoComplete="off">
                   <div className="field-group"><label>Email</label><input type="email" name="email" placeholder="you@example.com" required /></div>
                   <div className="field-group"><label>Password</label><PasswordField id="password" /></div>
                   <button type="submit" className="btn-primary">Sign In →</button>
+                </form>
+              ) : otpStep ? (
+                <form className="auth-form" onSubmit={handleVerifyOtp} autoComplete="off">
+                  <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: 16 }}>
+                    We sent a 6-digit code to <strong>{otpEmail}</strong>
+                  </p>
+                  <div className="field-group">
+                    <label>Verification Code</label>
+                    <input type="text" name="otp" placeholder="123456" maxLength={6} required style={{ letterSpacing: '4px', textAlign: 'center', fontSize: '1.2rem' }} />
+                  </div>
+                  <button type="submit" className="btn-primary">Verify & Create Account →</button>
+                  <div style={{ textAlign: 'center', marginTop: 12 }}>
+                    <button type="button" onClick={() => setOtpStep(false)} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem' }}>
+                      ← Back to Register
+                    </button>
+                  </div>
                 </form>
               ) : (
                 <form className="auth-form" onSubmit={handleEmailRegister} autoComplete="off">
@@ -173,8 +224,8 @@ export default function LoginPage() {
           {activeTab === 'phone' && (
             <div>
               <div className="subtoggle">
-                <button className={`stab ${isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(true); setToast({ ...toast, show: false }); }}>Sign In</button>
-                <button className={`stab ${!isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(false); setToast({ ...toast, show: false }); }}>Create Account</button>
+                <button className={`stab ${isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(true); setToast({ ...toast, show: false }); setOtpStep(false); }}>Sign In</button>
+                <button className={`stab ${!isLogin ? 'active' : ''}`} onClick={() => { setIsLogin(false); setToast({ ...toast, show: false }); setOtpStep(false); }}>Create Account</button>
               </div>
               {isLogin ? (
                 <form className="auth-form" onSubmit={handlePhoneLogin} autoComplete="off">

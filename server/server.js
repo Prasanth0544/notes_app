@@ -56,6 +56,12 @@ async function main() {
   await db.collection('users').createIndex({ phone: 1 },    { unique: true, sparse: true });
   await db.collection('users').createIndex({ oauth_id: 1 }, { sparse: true });
   await db.collection('notes').createIndex({ user_id: 1, modified: -1 });
+  await db.collection('notes').createIndex({ user_id: 1, deleted_at: 1 });
+  await db.collection('notes').createIndex({ user_id: 1, title: 1, deleted_at: 1 });
+  await db.collection('notes').createIndex({ user_id: 1, folder: 1 });
+  await db.collection('token_blacklist').createIndex({ token: 1 });
+  await db.collection('user_folders').createIndex({ user_id: 1, name: 1 }, { unique: true });
+  await db.collection('pending_registrations').createIndex({ createdAt: 1 }, { expireAfterSeconds: 600 }); // 10 min TTL
 
   // Token blacklist for logout
   const { initBlacklist } = require('./middleware/auth');

@@ -23,8 +23,128 @@ module.exports = function (db) {
   const users = db.collection('users');
 
   // ════════════════════════════════════════════════════
-  //  EMAIL / PASSWORD
+  //  EMAIL / PASSWORD (with OTP)
   // ════════════════════════════════════════════════════
+
+  const nodemailer = require('nodemailer');
+  const transporter = process.env.SMTP_HOST ? nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_PORT == '465',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  }) : null;
+
+  router.post('/register/send-otp', async (req, res) => {
+    try {
+      const { email: rawEmail, password, name } = req.body;
+      const email = (rawEmail || '').trim().toLowerCase();
+
+      if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+      if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+      if (await users.findOne({ email })) {
+        return res.status(409).json({ error: 'An account with this email already exists' });
+      }
+
+      // If no SMTP configured, return a specific error or fallback
+      if (!transporter) {
+        return res.status(501).json({ error: 'SMTP not configured. Use direct registration.' });
+      }
+
+      const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digits
+      const password_hash = await bcrypt.hash(password, 10);
+
+      // Save to pending registrations
+      const pendingCol = db.collection('pending_registrations');
+      await pendingCol.updateOne(
+        { email },
+        { 
+          $set: { 
+            email, 
+            password_hash, 
+            name: (name || '').trim() || email.split('@')[0], 
+            otp, 
+            createdAt: new Date() // TTL index uses this
+          } 
+        },
+        { upsert: true }
+      );
+
+      // Send Email
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || '"NoteVault" <noreply@notevault.com>',
+        to: email,
+        subject: 'Your NoteVault Verification Code',
+        text: `Your NoteVault registration code is: ${otp}\n\nThis code expires in 10 minutes.`,
+        html: `
+          <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+            <h2 style="color: #6c63ff; margin-top: 0;">Welcome to NoteVault!</h2>
+            <p style="color: #4b5563;">Your email verification code is:</p>
+            <div style="background: #f3f4f6; padding: 16px; border-radius: 6px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #111827; margin: 20px 0;">
+              ${otp}
+            </div>
+            <p style="color: #6b7280; font-size: 14px;">This code will expire in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
+          </div>
+        `
+      });
+
+      res.json({ ok: true, message: 'OTP sent successfully' });
+    } catch (err) {
+      console.error('Send OTP error:', err);
+      res.status(500).json({ error: 'Failed to send OTP email' });
+    }
+  });
+
+  router.post('/register/verify-otp', async (req, res) => {
+    try {
+      const { email: rawEmail, otp } = req.body;
+      const email = (rawEmail || '').trim().toLowerCase();
+
+      if (!email || !otp) return res.status(400).json({ error: 'Email and OTP are required' });
+
+      const pendingCol = db.collection('pending_registrations');
+      const pending = await pendingCol.findOne({ email });
+
+      if (!pending) {
+        return res.status(400).json({ error: 'OTP expired or invalid. Please request a new one.' });
+      }
+
+      if (pending.otp !== otp) {
+        return res.status(400).json({ error: 'Incorrect OTP' });
+      }
+
+      // OTP matches! Create the user account
+      if (await users.findOne({ email })) {
+        await pendingCol.deleteOne({ email });
+        return res.status(409).json({ error: 'An account with this email already exists' });
+      }
+
+      const doc = {
+        email,
+        password_hash: pending.password_hash,
+        name: pending.name,
+        username: '', age: '', role: '', avatar: '',
+        auth_providers: ['email'],
+        profile_done: false,
+        created_at: new Date(),
+      };
+      
+      const result = await users.insertOne(doc);
+      doc._id = result.insertedId;
+      
+      // Clean up pending registration
+      await pendingCol.deleteOne({ email });
+
+      const token = makeToken(doc._id);
+      res.status(201).json({ token, user: formatUser(doc) });
+    } catch (err) {
+      console.error('Verify OTP error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
 
   router.post('/register', async (req, res) => {
     try {
