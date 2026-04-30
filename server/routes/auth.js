@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const axios = require('axios');
+const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const { authMiddleware, makeToken, blacklistToken } = require('../middleware/auth');
 const { formatUser } = require('../utils/helpers');
@@ -22,6 +23,14 @@ function getHashString(hash) {
 
 module.exports = function (db) {
   const users = db.collection('users');
+  const authCodes = db.collection('auth_codes');
+
+  // Helper: generate a one-time auth code and store it (60s TTL via index)
+  async function generateAuthCode(token) {
+    const code = crypto.randomBytes(32).toString('hex');
+    await authCodes.insertOne({ code, token, createdAt: new Date() });
+    return code;
+  }
 
   // ════════════════════════════════════════════════════
   //  EMAIL / PASSWORD (with OTP)
@@ -303,7 +312,7 @@ module.exports = function (db) {
       const { user } = await findOrCreateOAuthUser(users, email, name, avatar, 'google', oauth_id);
       const token = makeToken(user._id);
 
-      // If linking, redirect back with existing token
+      // If linking, redirect back with code (not raw token)
       let linkToken = null;
       try { linkToken = JSON.parse(req.query.state || '{}').link_token; } catch {}
       if (linkToken) {
@@ -313,11 +322,12 @@ module.exports = function (db) {
           const decoded = jwt.verify(linkToken, process.env.JWT_SECRET_KEY);
           await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'google' } });
         } catch {}
-        return res.redirect(`/login?token=${linkToken}&linked=google`);
+        const code = await generateAuthCode(linkToken);
+        return res.redirect(`/login?code=${code}&linked=google`);
       }
 
-      const nextPage = user.profile_done ? 'login' : 'login';
-      res.redirect(`/${nextPage}?token=${token}`);
+      const code = await generateAuthCode(token);
+      res.redirect(`/login?code=${code}`);
     } catch (err) {
       console.error('Google OAuth error:', err.message);
       res.redirect('/login.html?error=google_failed');
@@ -371,7 +381,7 @@ module.exports = function (db) {
       const { user } = await findOrCreateOAuthUser(users, email, name, avatar, 'github', oauth_id);
       const token = makeToken(user._id);
 
-      // If linking, redirect back with existing token
+      // If linking, redirect back with code
       const linkToken = req.query.state || '';
       if (linkToken) {
         const jwt = require('jsonwebtoken');
@@ -379,13 +389,32 @@ module.exports = function (db) {
           const decoded = jwt.verify(linkToken, process.env.JWT_SECRET_KEY);
           await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'github' } });
         } catch {}
-        return res.redirect(`/login?token=${linkToken}&linked=github`);
+        const code = await generateAuthCode(linkToken);
+        return res.redirect(`/login?code=${code}&linked=github`);
       }
 
-      res.redirect(`/login?token=${token}`);
+      const code = await generateAuthCode(token);
+      res.redirect(`/login?code=${code}`);
     } catch (err) {
       console.error('GitHub OAuth error:', err.message);
       res.redirect('/login.html?error=github_failed');
+    }
+  });
+
+  // ════════════════════════════════════════════════════
+  //  EXCHANGE AUTH CODE → TOKEN (one-time, 60s expiry)
+  // ════════════════════════════════════════════════════
+
+  router.post('/exchange', async (req, res) => {
+    try {
+      const { code } = req.body;
+      if (!code) return res.status(400).json({ error: 'Code is required' });
+      const doc = await authCodes.findOneAndDelete({ code });
+      if (!doc) return res.status(401).json({ error: 'Invalid or expired code' });
+      res.json({ token: doc.token });
+    } catch (err) {
+      console.error('Code exchange error:', err);
+      res.status(500).json({ error: 'Server error' });
     }
   });
 

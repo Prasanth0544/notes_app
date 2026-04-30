@@ -63,6 +63,7 @@ async function main() {
   await db.collection('user_folders').createIndex({ user_id: 1, name: 1 }, { unique: true });
   await db.collection('pending_registrations').createIndex({ createdAt: 1 }, { expireAfterSeconds: 600 }); // 10 min TTL
   await db.collection('user_folders').createIndex({ user_id: 1, deleted_at: 1 });
+  await db.collection('auth_codes').createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 }); // 60s TTL
 
   // Token blacklist for logout
   const { initBlacklist } = require('./middleware/auth');

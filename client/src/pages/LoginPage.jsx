@@ -11,23 +11,42 @@ export default function LoginPage() {
   const [otpStep, setOtpStep] = useState(false);
   const [otpEmail, setOtpEmail] = useState('');
 
-  // ── Check URL token (from OAuth redirect) ──────────
+  // ── Check URL params (from OAuth redirect) ──────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const urlToken = params.get('token');
+    const urlCode = params.get('code');
+    const urlToken = params.get('token'); // legacy fallback
+    const urlLinked = params.get('linked');
     const urlErr = params.get('error');
-    if (urlToken) {
-      localStorage.setItem('nv_token', urlToken);
-      // Fetch profile to decide where to go
+
+    if (urlCode || urlToken) {
+      // Clean URL immediately so code/token is not in history
+      window.history.replaceState({}, '', window.location.pathname);
       (async () => {
         try {
+          let token = urlToken;
+          if (urlCode && !token) {
+            // Exchange one-time code for JWT token
+            const res = await fetch(API + '/auth/exchange', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ code: urlCode }),
+            });
+            if (!res.ok) { showToast('OAuth code expired — please try again.'); return; }
+            const data = await res.json();
+            token = data.token;
+          }
+          if (!token) { showToast('Login failed — no token received.'); return; }
+          localStorage.setItem('nv_token', token);
+          // Fetch profile to decide where to go
           const res = await fetch(API + '/auth/me', {
-            headers: { Authorization: 'Bearer ' + urlToken },
+            headers: { Authorization: 'Bearer ' + token },
           });
           if (res.ok) {
             const user = await res.json();
             localStorage.setItem('nv_user', JSON.stringify(user));
-            navigate(user.profile_done ? '/' : '/profile-setup');
+            const dest = user.profile_done ? '/' : '/profile-setup';
+            navigate(urlLinked ? `${dest}?linked=${urlLinked}` : dest);
           } else {
             navigate('/profile-setup');
           }
