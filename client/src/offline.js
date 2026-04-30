@@ -446,6 +446,21 @@ export async function getNoteIdsWithContent() {
   );
 }
 
+// ─── Remove IDB notes that no longer exist on server ──
+export async function cleanupStaleNotes(serverNoteIds) {
+  const serverSet = new Set(serverNoteIds);
+  const db = await getDb();
+  const all = await db.getAll('notes');
+  const staleIds = all.filter(n => !n.is_dirty && !serverSet.has(n.id)).map(n => n.id);
+  if (staleIds.length === 0) return 0;
+  const tx = db.transaction('notes', 'readwrite');
+  for (const id of staleIds) {
+    await tx.store.delete(id);
+  }
+  await tx.done;
+  return staleIds.length;
+}
+
 export async function createFolderOffline(name) {
   const db = await getDb();
   const tx = db.transaction(['folders', 'sync_queue'], 'readwrite');

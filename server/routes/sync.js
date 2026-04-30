@@ -20,12 +20,15 @@ module.exports = function (db) {
       }).sort({ modified: -1 }).toArray();
 
       res.json(docs.map(d => ({
-        id:       String(d._id),
-        title:    d.title || '',
-        content:  d.content || '',
-        tags:     d.tags || [],
-        created:  d.created || 0,
-        modified: d.modified || 0,
+        id:         String(d._id),
+        title:      d.title || '',
+        content:    d.content || '',
+        tags:       d.tags || [],
+        folder:     d.folder || '',
+        pinned:     d.pinned || false,
+        deleted_at: d.deleted_at || null,
+        created:    d.created || 0,
+        modified:   d.modified || 0,
       })));
     } catch (err) {
       console.error('Sync pull error:', err);
@@ -47,6 +50,8 @@ module.exports = function (db) {
           title:    n.title || 'Untitled Note',
           content:  n.content || '',
           tags:     n.tags || [],
+          folder:   n.folder || '',
+          pinned:   n.pinned || false,
           created:  n.created || ts,
           modified: ts,
         };

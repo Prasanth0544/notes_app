@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const axios = require('axios');
+const { ObjectId } = require('mongodb');
 const { authMiddleware, makeToken, blacklistToken } = require('../middleware/auth');
 const { formatUser } = require('../utils/helpers');
 
@@ -310,7 +311,6 @@ module.exports = function (db) {
         const jwt = require('jsonwebtoken');
         try {
           const decoded = jwt.verify(linkToken, process.env.JWT_SECRET_KEY);
-          const { ObjectId } = require('mongodb');
           await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'google' } });
         } catch {}
         return res.redirect(`/login?token=${linkToken}&linked=google`);
@@ -377,7 +377,6 @@ module.exports = function (db) {
         const jwt = require('jsonwebtoken');
         try {
           const decoded = jwt.verify(linkToken, process.env.JWT_SECRET_KEY);
-          const { ObjectId } = require('mongodb');
           await users.updateOne({ _id: new ObjectId(decoded.id) }, { $addToSet: { auth_providers: 'github' } });
         } catch {}
         return res.redirect(`/login?token=${linkToken}&linked=github`);
@@ -396,7 +395,6 @@ module.exports = function (db) {
 
   router.post('/link/phone', authMiddleware, async (req, res) => {
     try {
-      const { ObjectId } = require('mongodb');
       const phone = (req.body.phone || '').trim();
       if (!phone) return res.status(400).json({ error: 'Phone number required' });
       // Check if phone already used by another account
@@ -420,7 +418,6 @@ module.exports = function (db) {
 
   router.get('/me', authMiddleware, async (req, res) => {
     try {
-      const { ObjectId } = require('mongodb');
       const user = await users.findOne({ _id: new ObjectId(req.userId) });
       if (!user) return res.status(404).json({ error: 'User not found' });
       res.json(formatUser(user));
@@ -431,7 +428,6 @@ module.exports = function (db) {
 
   router.put('/profile', authMiddleware, async (req, res) => {
     try {
-      const { ObjectId } = require('mongodb');
       const data = req.body;
       const updates = {};
 
@@ -459,6 +455,32 @@ module.exports = function (db) {
       res.status(500).json({ error: 'Server error' });
     }
   });
+  // ════════════════════════════════════════════════════
+  //  CHANGE PASSWORD
+  // ════════════════════════════════════════════════════
+
+  router.put('/password', authMiddleware, async (req, res) => {
+    try {
+      const { old_password, new_password } = req.body;
+      if (!old_password || !new_password) return res.status(400).json({ error: 'Old and new passwords are required' });
+      if (new_password.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+
+      const user = await users.findOne({ _id: new ObjectId(req.userId) });
+      if (!user || !user.password_hash) return res.status(400).json({ error: 'No password set — use profile to set one' });
+
+      const hashStr = getHashString(user.password_hash);
+      const match = await bcrypt.compare(old_password, hashStr);
+      if (!match) return res.status(401).json({ error: 'Current password is incorrect' });
+
+      const newHash = await bcrypt.hash(new_password, 10);
+      await users.updateOne({ _id: new ObjectId(req.userId) }, { $set: { password_hash: newHash } });
+      res.json({ ok: true, message: 'Password changed successfully' });
+    } catch (err) {
+      console.error('Change password error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
   // ════════════════════════════════════════════════════
   //  LOGOUT (blacklist token)
   // ════════════════════════════════════════════════════

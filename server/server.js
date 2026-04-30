@@ -62,6 +62,7 @@ async function main() {
   await db.collection('token_blacklist').createIndex({ token: 1 });
   await db.collection('user_folders').createIndex({ user_id: 1, name: 1 }, { unique: true });
   await db.collection('pending_registrations').createIndex({ createdAt: 1 }, { expireAfterSeconds: 600 }); // 10 min TTL
+  await db.collection('user_folders').createIndex({ user_id: 1, deleted_at: 1 });
 
   // Token blacklist for logout
   const { initBlacklist } = require('./middleware/auth');
@@ -83,8 +84,8 @@ async function main() {
     credentials: true,
   }));
 
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // Rate limit auth endpoints (20 requests per 15-min window)
   app.use('/api/auth/', rateLimit({
@@ -93,6 +94,15 @@ async function main() {
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many attempts — please try again in 15 minutes.' },
+  }));
+
+  // Rate limit notes endpoints (120 requests per minute)
+  app.use('/api/notes/', rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests — slow down.' },
   }));
 
   // ── Health Check (used by frontend to detect local server) ──
@@ -146,4 +156,8 @@ main().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+
+// Graceful shutdown
+process.on('SIGTERM', () => { console.log('\n  🛑 SIGTERM received — shutting down...'); process.exit(0); });
+process.on('SIGINT',  () => { console.log('\n  🛑 SIGINT received — shutting down...');  process.exit(0); });
 

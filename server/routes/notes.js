@@ -45,6 +45,12 @@ module.exports = function (db) {
     const now = Date.now();
     if (now - (lastPurge.get(userId) || 0) < 60000) return; // once per minute per user
     lastPurge.set(userId, now);
+    // Prevent memory leak: prune map if it grows too large
+    if (lastPurge.size > 1000) {
+      for (const [k, v] of lastPurge) {
+        if (now - v > 300000) lastPurge.delete(k); // remove entries older than 5 min
+      }
+    }
     const cutoff = nowMs() - SEVEN_DAYS_MS;
     await notes.deleteMany({
       user_id: userId,
@@ -63,8 +69,9 @@ module.exports = function (db) {
       const query = { user_id: req.userId, deleted_at: { $exists: false } };
       if (q) {
         query.$or = [
-          { title: { $regex: q, $options: 'i' } },
-          { tags:  { $regex: q, $options: 'i' } },
+          { title:   { $regex: q, $options: 'i' } },
+          { tags:    { $regex: q, $options: 'i' } },
+          { content: { $regex: q, $options: 'i' } },
         ];
       }
       if (folder) {

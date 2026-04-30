@@ -4,7 +4,11 @@
  */
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET_KEY || 'fallback-change-me';
+const JWT_SECRET = process.env.JWT_SECRET_KEY;
+if (!JWT_SECRET) {
+  console.error('⛔ JWT_SECRET_KEY not set in .env — cannot start.');
+  process.exit(1);
+}
 
 // Blacklist collection reference (set by initBlacklist)
 let blacklistCol = null;

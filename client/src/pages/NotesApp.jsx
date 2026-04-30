@@ -7,7 +7,7 @@ import {
   permanentDeleteOffline, pinNoteOffline,
   cacheFolders, getOfflineFolders, createFolderOffline, deleteFolderOffline,
   syncQueue, getLastSync, setLastSync, getStorageEstimate, requestPersistentStorage,
-  getNoteIdsWithContent,
+  getNoteIdsWithContent, cleanupStaleNotes,
 } from '../offline.js';
 import TabBar from './TabBar.jsx';
 import ProfileModal from './ProfileModal.jsx';
@@ -1118,6 +1118,13 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         } catch {}
       }
     }
+
+    // Step 1b: Clean up IDB ghost notes (deleted on server but still in IDB)
+    try {
+      const serverIds = loadedNotes.map(n => n.id);
+      const removed = await cleanupStaleNotes(serverIds);
+      if (removed > 0) console.log(`🧹 Cleaned ${removed} stale notes from IDB`);
+    } catch {}
 
     // Step 2: Build ranked queue of notes NOT yet in memory cache
     const uncached = loadedNotes.filter(n => !cache.has(n.id));
