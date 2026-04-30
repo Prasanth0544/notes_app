@@ -821,18 +821,42 @@ export default function NotesApp() {
     const el = editorRef.current;
     if (!el) return;
     el.focus({ preventScroll: true });
-    const html = `<div contenteditable="true" style="border:2px solid var(--accent);border-radius:8px;padding:12px 16px;margin:12px 0;min-height:60px;background:rgba(108,99,255,.04);position:relative;resize:both;overflow:auto;max-width:100%;cursor:text;" data-textbox="true"><p>Type here…</p></div><p><br></p>`;
+    
+    // Default position near center of editor view
+    const scrollTop = el.scrollTop || 0;
+    const top = scrollTop + 50;
+    const left = 50;
+
+    const html = `
+      <div class="nv-shape" contenteditable="false" style="left: ${left}px; top: ${top}px; width: 250px; height: 100px;">
+        <div class="nv-shape-content" contenteditable="true"><p>Type here…</p></div>
+        <div class="nv-shape-handle nw" data-handle="nw"></div>
+        <div class="nv-shape-handle n" data-handle="n"></div>
+        <div class="nv-shape-handle ne" data-handle="ne"></div>
+        <div class="nv-shape-handle w" data-handle="w"></div>
+        <div class="nv-shape-handle e" data-handle="e"></div>
+        <div class="nv-shape-handle sw" data-handle="sw"></div>
+        <div class="nv-shape-handle s" data-handle="s"></div>
+        <div class="nv-shape-handle se" data-handle="se"></div>
+      </div><p><br></p>`;
+      
     document.execCommand('insertHTML', false, html);
-    // Focus inside the new text box
-    const boxes = el.querySelectorAll('[data-textbox]');
-    if (boxes.length > 0) {
-      const last = boxes[boxes.length - 1];
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(last);
-      range.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(range);
+    
+    // Make the new shape active and focus it
+    const shapes = el.querySelectorAll('.nv-shape');
+    if (shapes.length > 0) {
+      const last = shapes[shapes.length - 1];
+      el.querySelectorAll('.nv-shape.active').forEach(s => s.classList.remove('active'));
+      last.classList.add('active');
+      const content = last.querySelector('.nv-shape-content');
+      if (content) {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(content);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
     }
     scheduleSave();
   }
@@ -1383,6 +1407,113 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     document.addEventListener('mousedown', closeLibMenus);
     return () => document.removeEventListener('mousedown', closeLibMenus);
   }, []);
+
+  // ─── Free-Floating TextBox Drag/Resize Engine ──────
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    let isDragging = false;
+    let isResizing = false;
+    let currentShape = null;
+    let currentHandle = null;
+    let startX = 0, startY = 0;
+    let startLeft = 0, startTop = 0;
+    let startW = 0, startH = 0;
+
+    function onMouseDown(e) {
+      const shape = e.target.closest('.nv-shape');
+      if (!shape) {
+        // Clicked outside any shape, deactivate all
+        editor.querySelectorAll('.nv-shape.active').forEach(s => s.classList.remove('active'));
+        return;
+      }
+
+      // Activate clicked shape
+      editor.querySelectorAll('.nv-shape.active').forEach(s => {
+        if (s !== shape) s.classList.remove('active');
+      });
+      shape.classList.add('active');
+
+      if (e.target.classList.contains('nv-shape-handle')) {
+        // Start resizing
+        isResizing = true;
+        currentShape = shape;
+        currentHandle = e.target.dataset.handle;
+        startX = e.clientX;
+        startY = e.clientY;
+        startLeft = parseFloat(shape.style.left) || 0;
+        startTop = parseFloat(shape.style.top) || 0;
+        startW = shape.offsetWidth;
+        startH = shape.offsetHeight;
+        e.preventDefault(); // Prevent text selection
+      } else if (e.target === shape || e.target.classList.contains('nv-shape')) {
+        // Start dragging
+        isDragging = true;
+        currentShape = shape;
+        startX = e.clientX;
+        startY = e.clientY;
+        startLeft = parseFloat(shape.style.left) || 0;
+        startTop = parseFloat(shape.style.top) || 0;
+        e.preventDefault();
+      }
+    }
+
+    function onMouseMove(e) {
+      if (!currentShape) return;
+      
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      if (isDragging) {
+        currentShape.style.left = `${startLeft + dx}px`;
+        currentShape.style.top = `${startTop + dy}px`;
+      } else if (isResizing) {
+        let newW = startW, newH = startH, newL = startLeft, newT = startTop;
+
+        if (currentHandle.includes('e')) newW = startW + dx;
+        if (currentHandle.includes('s')) newH = startH + dy;
+        if (currentHandle.includes('w')) {
+          newW = startW - dx;
+          newL = startLeft + dx;
+        }
+        if (currentHandle.includes('n')) {
+          newH = startH - dy;
+          newT = startTop + dy;
+        }
+
+        // Enforce minimum size
+        if (newW > 50) {
+          currentShape.style.width = `${newW}px`;
+          currentShape.style.left = `${newL}px`;
+        }
+        if (newH > 40) {
+          currentShape.style.height = `${newH}px`;
+          currentShape.style.top = `${newT}px`;
+        }
+      }
+    }
+
+    function onMouseUp(e) {
+      if (isDragging || isResizing) {
+        isDragging = false;
+        isResizing = false;
+        currentShape = null;
+        currentHandle = null;
+        scheduleSave();
+      }
+    }
+
+    editor.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    return () => {
+      editor.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [activeId]); // Re-attach when switching notes
 
   // ─── RENDER ────────────────────────────────────────
   return (
