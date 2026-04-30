@@ -419,8 +419,12 @@ export async function cacheFolders(foldersArray) {
     const db = await getDb();
     const tx = db.transaction('folders', 'readwrite');
     await tx.store.clear();
-    for (const name of foldersArray) {
-      await tx.store.put({ name });
+    for (const f of foldersArray) {
+      // Handle both string (old) and object (new) formats
+      const obj = typeof f === 'string'
+        ? { name: f }
+        : { name: f.name, last_accessed: f.last_accessed || 0 };
+      await tx.store.put(obj);
     }
     await tx.done;
   });
@@ -429,7 +433,17 @@ export async function cacheFolders(foldersArray) {
 export async function getOfflineFolders() {
   const db = await getDb();
   const all = await db.getAll('folders');
-  return all.map(f => f.name);
+  return all; // Returns [{name, last_accessed}, ...] — caller extracts what it needs
+}
+
+// ─── Check which notes already have full content cached ──
+export async function getNoteIdsWithContent() {
+  const db = await getDb();
+  const all = await db.getAll('notes');
+  return new Set(
+    all.filter(n => !n.deleted_at && (n.content || n.content_compressed))
+       .map(n => n.id)
+  );
 }
 
 export async function createFolderOffline(name) {

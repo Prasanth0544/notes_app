@@ -194,7 +194,7 @@ module.exports = function (db) {
   router.get('/folders', authMiddleware, async (req, res) => {
     try {
       const docs = await userFolders.find({ user_id: req.userId, deleted_at: { $exists: false } }).sort({ name: 1 }).toArray();
-      res.json(docs.map(d => d.name));
+      res.json(docs.map(d => ({ name: d.name, last_accessed: d.last_accessed || 0 })));
     } catch (err) {
       console.error('List folders error:', err);
       res.status(500).json({ error: 'Server error' });
@@ -214,6 +214,20 @@ module.exports = function (db) {
     } catch (err) {
       console.error('Create folder error:', err);
       res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+  // ── Record folder access (for prefetch ranking) ───
+  router.put('/folders/:name/access', authMiddleware, async (req, res) => {
+    try {
+      const folderName = decodeURIComponent(req.params.name);
+      await userFolders.updateOne(
+        { user_id: req.userId, name: folderName },
+        { $set: { last_accessed: Date.now() } }
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: 'Invalid folder' });
     }
   });
 

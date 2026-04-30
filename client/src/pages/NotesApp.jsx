@@ -7,6 +7,7 @@ import {
   permanentDeleteOffline, pinNoteOffline,
   cacheFolders, getOfflineFolders, createFolderOffline, deleteFolderOffline,
   syncQueue, getLastSync, setLastSync, getStorageEstimate, requestPersistentStorage,
+  getNoteIdsWithContent,
 } from '../offline.js';
 import TabBar from './TabBar.jsx';
 import ProfileModal from './ProfileModal.jsx';
@@ -67,6 +68,8 @@ export default function NotesApp() {
   const [noteFolder, setNoteFolder] = useState('');        // current note's folder
   const [openTabs, setOpenTabs] = useState([]);            // [{id, title}]
   const [collapsedFolders, setCollapsedFolders] = useState(new Set());
+  const folderRankingRef = useRef(new Map());
+  const folderAccessTimers = useRef(new Map());
 
   const activeIdRef = useRef(null);
   const isDirtyRef = useRef(false);
@@ -323,6 +326,7 @@ export default function NotesApp() {
     setSidebarView('notes'); // switch to notes view if in trash
     // Use activeFolder (sidebar selection) or fall back to the current note's folder
     const targetFolder = activeFolder || noteFolder;
+    if (targetFolder) updateFolderAccess(targetFolder);
     try {
       // Create note in the target folder
       const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [], folder: targetFolder }) });
@@ -441,14 +445,38 @@ export default function NotesApp() {
   // ─── Folder Operations ────────────────────────────
   async function loadFolders() {
     try {
-      const f = await apiFetch('/notes/folders');
-      setFolders(f);
-      cacheFolders(f).catch(() => {});
+      const data = await apiFetch('/notes/folders');
+      // data is [{name, last_accessed}, ...]
+      setFolders(data.map(f => f.name));
+      folderRankingRef.current = new Map(data.map(f => [f.name, f.last_accessed || 0]));
+      cacheFolders(data).catch(() => {});
+      return data;
     } catch {
       // Offline fallback
-      const f = await getOfflineFolders().catch(() => []);
-      setFolders(f);
+      const data = await getOfflineFolders().catch(() => []);
+      const isOldFormat = data.length > 0 && typeof data[0] === 'string';
+      if (isOldFormat) {
+        setFolders(data);
+        folderRankingRef.current = new Map();
+      } else {
+        setFolders(data.map(f => f.name));
+        folderRankingRef.current = new Map(data.map(f => [f.name, f.last_accessed || 0]));
+      }
+      return data;
     }
+  }
+
+  function updateFolderAccess(folderName) {
+    if (!folderName) return;
+    // Always update local ranking instantly
+    folderRankingRef.current.set(folderName, Date.now());
+    // Throttle server calls: max 1 per folder every 2 seconds
+    if (folderAccessTimers.current.has(folderName)) return;
+    folderAccessTimers.current.set(folderName, true);
+    setTimeout(() => folderAccessTimers.current.delete(folderName), 2000);
+    // Fire-and-forget API call
+    apiFetch(`/notes/folders/${encodeURIComponent(folderName)}/access`,
+      { method: 'PUT' }).catch(() => {});
   }
 
   async function createFolder() {
@@ -1072,6 +1100,92 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
+  // ─── Ranked Prefetch with Progress Toasts ──────────
+  async function prefetchAllNotes(loadedNotes, currentFolder) {
+    const cache = noteCacheRef.current;
+
+    // Step 1: IDB warm-up — load notes already cached with content from previous sessions
+    let cachedIds = new Set();
+    try { cachedIds = await getNoteIdsWithContent(); } catch {}
+
+    for (const n of loadedNotes) {
+      if (!cache.has(n.id) && cachedIds.has(n.id)) {
+        try {
+          const fromIdb = await getOfflineNote(n.id);
+          if (fromIdb && (fromIdb.content || fromIdb.content_compressed)) {
+            cache.set(n.id, fromIdb);
+          }
+        } catch {}
+      }
+    }
+
+    // Step 2: Build ranked queue of notes NOT yet in memory cache
+    const uncached = loadedNotes.filter(n => !cache.has(n.id));
+    if (uncached.length === 0) {
+      showToastMsg('✅ All notes cached for offline!', 3000);
+      return;
+    }
+
+    // Separate into ranked groups
+    const activeFolderNotes = [];
+    const folderBuckets = new Map();
+    const unfiledNotes = [];
+
+    for (const n of uncached) {
+      if (n.folder === currentFolder && currentFolder) {
+        activeFolderNotes.push(n);
+      } else if (n.folder) {
+        if (!folderBuckets.has(n.folder)) folderBuckets.set(n.folder, []);
+        folderBuckets.get(n.folder).push(n);
+      } else {
+        unfiledNotes.push(n);
+      }
+    }
+
+    // Sort folder buckets by ranking (last_accessed DESC)
+    const ranking = folderRankingRef.current;
+    const sortedFolderNotes = [...folderBuckets.entries()]
+      .sort((a, b) => (ranking.get(b[0]) || 0) - (ranking.get(a[0]) || 0))
+      .flatMap(([, notes]) => notes);
+
+    // Final queue: active folder → ranked folders → unfiled
+    const fetchQueue = [...activeFolderNotes, ...sortedFolderNotes, ...unfiledNotes];
+    const total = fetchQueue.length;
+    if (total === 0) return;
+
+    let fetched = 0;
+    let consecutiveFailures = 0;
+    const milestones = new Set([
+      Math.max(1, Math.floor(total * 0.25)),
+      Math.max(1, Math.floor(total * 0.50)),
+      Math.max(1, Math.floor(total * 0.75)),
+      total
+    ]);
+
+    // Step 3: Fetch one by one with progress toasts
+    for (const n of fetchQueue) {
+      if (consecutiveFailures >= 3) {
+        showToastMsg('⚠️ Server unreachable — cached notes available offline', 3000);
+        break;
+      }
+      try {
+        const full = await apiFetch(`/notes/${n.id}`);
+        cache.set(n.id, full);
+        cacheNote(full).catch(() => {});
+        consecutiveFailures = 0;
+      } catch {
+        consecutiveFailures++;
+      }
+      fetched++;
+
+      if (milestones.has(fetched)) {
+        const pct = Math.round((fetched / total) * 100);
+        if (pct < 100) showToastMsg(`📥 Caching notes… ${pct}%`);
+        else showToastMsg('✅ All notes cached for offline!', 3000);
+      }
+    }
+  }
+
   // ─── Init ──────────────────────────────────────────
   useEffect(() => {
     (async () => {
@@ -1095,19 +1209,8 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
           console.warn(`⚠️ IndexedDB storage: ${est.usedMB}MB / ${est.totalMB}MB (${est.percentUsed}%)`);
         }
       }).catch(() => {});
-      // Background prefetch using resolved notes (not stale allNotes state)
-      setTimeout(async () => {
-        const cache = noteCacheRef.current;
-        for (const n of loadedNotes.slice(1)) {
-          if (!cache.has(n.id)) {
-            try {
-              const full = await apiFetch(`/notes/${n.id}`);
-              cache.set(n.id, full);
-              cacheNote(full).catch(() => {});
-            } catch { break; } // stop prefetch if server unreachable
-          }
-        }
-      }, 1500);
+      // Background prefetch with folder ranking + progress toasts
+      setTimeout(() => prefetchAllNotes(loadedNotes, activeFolder), 1500);
       // Show ready toast based on actual server reachability
       const serverUp = await checkServerReachable();
       showToastMsg(serverUp ? '📓 NoteVault ready!' : '📴 Offline mode');
@@ -1239,6 +1342,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                       return next;
                     });
                     setActiveFolder(f);
+                    updateFolderAccess(f);
                   }}
                 >
                   <span style={{ marginRight: 4, fontSize: '.65rem', opacity: .5 }}>{isCollapsed ? '▶' : '▼'}</span>
@@ -1265,7 +1369,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                       if (noteMenu) { setNoteMenu(null); return; }
                       if (n.id === activeId) return;
                       if (isDirtyRef.current) { const c = await showUnsavedModal(); if (c === 'save') await saveCurrentNote(); else if (c === 'cancel') return; }
-                      setIsDirty(false); setActiveFolder(f); openNote(n.id);
+                      setIsDirty(false); setActiveFolder(f); updateFolderAccess(f); openNote(n.id);
                     }}
                   >
                     {n.pinned && <span style={{ marginRight: 3, fontSize: '.6rem' }}>📌</span>}
