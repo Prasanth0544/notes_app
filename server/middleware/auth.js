@@ -65,6 +65,7 @@ async function authMiddleware(req, res, next) {
 async function blacklistToken(token) {
   if (!blacklistCol) return;
   try {
+    tokenCache.delete(token);
     const decoded = jwt.decode(token);
     const expiresAt = decoded?.exp ? new Date(decoded.exp * 1000) : new Date(Date.now() + 30 * 86400000);
     await blacklistCol.insertOne({ token, expiresAt, blacklistedAt: new Date() });

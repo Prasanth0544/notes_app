@@ -817,6 +817,26 @@ export default function NotesApp() {
     }
   }
 
+  function insertTextBox() {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    const html = `<div contenteditable="true" style="border:2px solid var(--accent);border-radius:8px;padding:12px 16px;margin:12px 0;min-height:60px;background:rgba(108,99,255,.04);position:relative;resize:both;overflow:auto;max-width:100%;cursor:text;" data-textbox="true"><p>Type here…</p></div><p><br></p>`;
+    document.execCommand('insertHTML', false, html);
+    // Focus inside the new text box
+    const boxes = el.querySelectorAll('[data-textbox]');
+    if (boxes.length > 0) {
+      const last = boxes[boxes.length - 1];
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(last);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    scheduleSave();
+  }
+
   // ─── Clear ALL Formatting ─────────────────────────
   function clearAllFormatting() {
     editorRef.current?.focus({ preventScroll: true });
@@ -1174,7 +1194,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     const zip = new JSZip();
     let count = 0;
 
-    for (const n of notes) {
+    for (const n of allNotes) {
       let note = cache.get(n.id);
       if (!note) {
         try { note = await apiFetch(`/notes/${n.id}`); } catch { continue; }
@@ -1190,6 +1210,31 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     const blob = await zip.generateAsync({ type: 'blob' });
     saveAs(blob, `NoteVault_Backup_${new Date().toISOString().slice(0,10)}.zip`);
     showToastMsg(`✅ Exported ${count} notes as ZIP`);
+  }
+
+  async function exportFolder(folderName) {
+    showToastMsg(`📦 Exporting ${folderName}...`);
+    const cache = noteCacheRef.current;
+    const zip = new JSZip();
+    let count = 0;
+    const folderNotes = allNotes.filter(n => n.folder === folderName);
+
+    for (const n of folderNotes) {
+      let note = cache.get(n.id);
+      if (!note) {
+        try { note = await apiFetch(`/notes/${n.id}`); } catch { continue; }
+      }
+      const title = (note.title || 'Untitled').replace(/[^a-zA-Z0-9 _-]/g, '') || 'Untitled';
+      const md = `# ${note.title || 'Untitled'}\n\n${htmlToMarkdown(note.content || '')}`;
+      zip.file(`${title}.md`, md);
+      count++;
+    }
+
+    if (count === 0) { showToastMsg('⚠️ No notes in this folder'); return; }
+    const safeName = folderName.replace(/[^a-zA-Z0-9 _-]/g, '');
+    const blob = await zip.generateAsync({ type: 'blob' });
+    saveAs(blob, `NoteVault_${safeName}_${new Date().toISOString().slice(0,10)}.zip`);
+    showToastMsg(`✅ Exported ${count} notes from ${folderName}`);
   }
 
   // ─── Ranked Prefetch with Progress Toasts ──────────
@@ -1384,6 +1429,10 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 onClick={(e) => { e.stopPropagation(); setShowProfileEdit(true); }}>
                 <span className="dropdown-icon">✏️</span> Edit Details
               </button>
+              <button className="dropdown-item" style={{ color: 'var(--fg)' }}
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); exportAllNotes(); }}>
+                <span className="dropdown-icon">📤</span> Export All Notes
+              </button>
               <button className="dropdown-item danger" id="btnLogout"
                 onClick={(e) => { e.stopPropagation(); localStorage.removeItem('nv_token'); localStorage.removeItem('nv_user'); navigate('/login'); }}>
                 <span className="dropdown-icon">⏏</span> Sign out
@@ -1456,6 +1505,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                   {folderMenu === f && (
                     <div style={{ position: 'absolute', right: 8, top: 28, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 140, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
                       <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameFolder(f)}>✏️ Rename</button>
+                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => { setFolderMenu(null); exportFolder(f); }}>📤 Export folder</button>
                       <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
                       <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => { setFolderMenu(null); deleteFolder(f); }}>🗑️ Delete folder</button>
                     </div>
@@ -1945,6 +1995,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               }}>🔗 Link</button>
               <button className="tb-btn" title="Insert table" onClick={insertTable}>📊 Table</button>
               <button className="tb-btn" title="Insert code" onClick={insertCode}>{'</>'} Code</button>
+              <button className="tb-btn" title="Insert text box" onClick={insertTextBox}>📦 TextBox</button>
               <button className="tb-btn" title="Horizontal rule" onMouseDown={e => { e.preventDefault(); insertHorizontalRule(); }}>─ Line</button>
               <button className="tb-btn" title="Clear ALL formatting" onMouseDown={e => { e.preventDefault(); clearAllFormatting(); }}>✕ Format</button>
 
@@ -1974,6 +2025,20 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
               <button className="tb-btn tb-save" onClick={() => { saveCurrentNote(); showToastMsg('💾 Saved!'); }}>💾 Save</button>
               <button className="tb-btn tb-saveas" onClick={saveAsFile}>📥Download</button>
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <button className="tb-btn" onClick={() => setShowExportMenu(!showExportMenu)} title="Export note">📤 Export</button>
+                {showExportMenu && (
+                  <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 180, zIndex: 200, fontFamily: 'var(--font)' }}>
+                    <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Current Note</div>
+                    {[{f:'txt',icon:'📄',label:'Plain Text (.txt)'},{f:'md',icon:'📝',label:'Markdown (.md)'},{f:'html',icon:'🌐',label:'HTML (.html)'}].map(o => (
+                      <button key={o.f} style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => exportCurrentNote(o.f)}>{o.icon} {o.label}</button>
+                    ))}
+                    <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+                    <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>All Notes</div>
+                    <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={exportAllNotes}>📦 Export All as ZIP</button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Editor body */}
