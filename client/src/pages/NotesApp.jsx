@@ -11,6 +11,8 @@ import {
 } from '../offline.js';
 import TabBar from './TabBar.jsx';
 import ProfileModal from './ProfileModal.jsx';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 
 /* ═══════════════════════════════════════════════════════
    NotesApp – Main page (replaces index.html + app.js)
@@ -47,6 +49,7 @@ export default function NotesApp() {
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [lineSpacing, setLineSpacing] = useState('1.75');
   const [docStats, setDocStats] = useState({ words: 0, chars: 0, sentences: 0, paragraphs: 0, readTime: '0 min' });
   const [directFontSize, setDirectFontSize] = useState('16');
@@ -1100,6 +1103,95 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
 
+  // ─── Export Helpers ────────────────────────────────
+  function htmlToPlainText(html) {
+    const div = document.createElement('div');
+    div.innerHTML = html || '';
+    // Convert <br> and block elements to newlines
+    div.querySelectorAll('br').forEach(el => el.replaceWith('\n'));
+    div.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li').forEach(el => {
+      el.prepend('\n');
+    });
+    return div.textContent.trim();
+  }
+
+  function htmlToMarkdown(html) {
+    let md = html || '';
+    // Headings
+    md = md.replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n');
+    md = md.replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n');
+    md = md.replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n');
+    // Bold, italic, strikethrough
+    md = md.replace(/<(b|strong)[^>]*>(.*?)<\/(b|strong)>/gi, '**$2**');
+    md = md.replace(/<(i|em)[^>]*>(.*?)<\/(i|em)>/gi, '*$2*');
+    md = md.replace(/<(s|strike|del)[^>]*>(.*?)<\/(s|strike|del)>/gi, '~~$2~~');
+    // Links
+    md = md.replace(/<a[^>]*href="([^"]*?)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)');
+    // Images
+    md = md.replace(/<img[^>]*src="([^"]*?)"[^>]*>/gi, '![image]($1)');
+    // Lists
+    md = md.replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n');
+    // Line breaks and paragraphs
+    md = md.replace(/<br\s*\/?>/gi, '\n');
+    md = md.replace(/<\/p>/gi, '\n\n');
+    md = md.replace(/<\/?[^>]+(>|$)/g, ''); // strip remaining tags
+    md = md.replace(/&nbsp;/g, ' ');
+    md = md.replace(/&amp;/g, '&');
+    md = md.replace(/&lt;/g, '<');
+    md = md.replace(/&gt;/g, '>');
+    return md.trim();
+  }
+
+  function downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    saveAs(blob, filename);
+  }
+
+  function exportCurrentNote(format) {
+    setShowExportMenu(false);
+    const cache = noteCacheRef.current;
+    const note = cache.get(activeId);
+    if (!note) { showToastMsg('⚠️ Note not loaded yet'); return; }
+    const title = (note.title || 'Untitled').replace(/[^a-zA-Z0-9 _-]/g, '');
+    const content = note.content || '';
+
+    if (format === 'txt') {
+      downloadFile(htmlToPlainText(content), `${title}.txt`, 'text/plain;charset=utf-8');
+    } else if (format === 'md') {
+      const md = `# ${note.title || 'Untitled'}\n\n${htmlToMarkdown(content)}`;
+      downloadFile(md, `${title}.md`, 'text/markdown;charset=utf-8');
+    } else if (format === 'html') {
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${note.title || 'Untitled'}</title><style>body{font-family:system-ui;max-width:800px;margin:40px auto;padding:0 20px;color:#333;line-height:1.6}h1{border-bottom:2px solid #eee;padding-bottom:8px}</style></head><body><h1>${note.title || 'Untitled'}</h1>${content}</body></html>`;
+      downloadFile(html, `${title}.html`, 'text/html;charset=utf-8');
+    }
+    showToastMsg(`📥 Exported as ${format.toUpperCase()}`);
+  }
+
+  async function exportAllNotes() {
+    setShowExportMenu(false);
+    showToastMsg('📦 Preparing ZIP export...');
+    const cache = noteCacheRef.current;
+    const zip = new JSZip();
+    let count = 0;
+
+    for (const n of notes) {
+      let note = cache.get(n.id);
+      if (!note) {
+        try { note = await apiFetch(`/notes/${n.id}`); } catch { continue; }
+      }
+      const title = (note.title || 'Untitled').replace(/[^a-zA-Z0-9 _-]/g, '') || 'Untitled';
+      const folder = note.folder || 'Unfiled';
+      const md = `# ${note.title || 'Untitled'}\n\n${htmlToMarkdown(note.content || '')}`;
+      zip.file(`${folder}/${title}.md`, md);
+      count++;
+    }
+
+    if (count === 0) { showToastMsg('⚠️ No notes to export'); return; }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    saveAs(blob, `NoteVault_Backup_${new Date().toISOString().slice(0,10)}.zip`);
+    showToastMsg(`✅ Exported ${count} notes as ZIP`);
+  }
+
   // ─── Ranked Prefetch with Progress Toasts ──────────
   async function prefetchAllNotes(loadedNotes, currentFolder) {
     const cache = noteCacheRef.current;
@@ -1964,6 +2056,24 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
             {/* Status bar */}
             <div className="statusbar">
               <span>{wordCount}</span>
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <button
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '.72rem', fontWeight: 600, fontFamily: 'var(--font)', padding: '2px 8px' }}
+                  onClick={() => setShowExportMenu(!showExportMenu)}
+                  title="Export this note"
+                >📥 Export</button>
+                {showExportMenu && (
+                  <div style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: 4, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 160, zIndex: 200, fontFamily: 'var(--font)' }}>
+                    <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Current Note</div>
+                    {[{f:'txt',icon:'📄',label:'Plain Text (.txt)'},{f:'md',icon:'📝',label:'Markdown (.md)'},{f:'html',icon:'🌐',label:'HTML (.html)'}].map(o => (
+                      <button key={o.f} style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => exportCurrentNote(o.f)}>{o.icon} {o.label}</button>
+                    ))}
+                    <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+                    <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>All Notes</div>
+                    <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={exportAllNotes}>📦 Export All as ZIP</button>
+                  </div>
+                )}
+              </div>
               <span className={saveStatus === 'ok' ? 'save-ok' : saveStatus === 'pending' ? 'save-pending' : 'save-err'}>
                 {saveStatus === 'ok' ? '✔ Saved' : saveStatus === 'pending' ? '⏳ Saving…' : '✖ Error'}
               </span>
