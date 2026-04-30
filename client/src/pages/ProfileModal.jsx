@@ -1,9 +1,11 @@
 import { useState } from 'react';
 
-export default function ProfileModal({ user, onClose, onSave, onLinkPhone, getToken, API }) {
+export default function ProfileModal({ user, onClose, onSave, onLinkPhone, onChangePassword, getToken, API }) {
   const [profileForm, setProfileForm] = useState({
     name: user.name || '', username: user.username || '', age: user.age || '', role: user.role || ''
   });
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [pwForm, setPwForm] = useState({ old_password: '', new_password: '' });
 
   return (
     <div className="profile-modal-overlay" onClick={onClose}>
@@ -71,6 +73,54 @@ export default function ProfileModal({ user, onClose, onSave, onLinkPhone, getTo
             )}
           </div>
         </div>
+
+        {/* Change Password Section */}
+        {user.password_hash && (
+          <div style={{ marginBottom: 16 }}>
+            <button 
+              onClick={() => setShowPasswordChange(!showPasswordChange)}
+              style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0, fontSize: '0.9rem', fontWeight: 500 }}
+            >
+              {showPasswordChange ? '▼ Hide Password Change' : '▶ Change Password'}
+            </button>
+            
+            {showPasswordChange && (
+              <div style={{ marginTop: 12, padding: 12, background: 'var(--bg)', borderRadius: 6, border: '1px solid var(--border)' }}>
+                <div style={{ marginBottom: 8 }}>
+                  <label className="profile-field-label">Current Password</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={pwForm.old_password}
+                    onChange={e => setPwForm(prev => ({ ...prev, old_password: e.target.value }))}
+                    className="profile-field-input"
+                  />
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label className="profile-field-label">New Password</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={pwForm.new_password}
+                    onChange={e => setPwForm(prev => ({ ...prev, new_password: e.target.value }))}
+                    className="profile-field-input"
+                  />
+                </div>
+                <button 
+                  onClick={() => {
+                    onChangePassword(pwForm.old_password, pwForm.new_password);
+                    setPwForm({ old_password: '', new_password: '' });
+                    setShowPasswordChange(false);
+                  }}
+                  disabled={!pwForm.old_password || pwForm.new_password.length < 6}
+                  className="auth-link-btn" style={{ background: 'var(--accent)', color: 'white', opacity: (!pwForm.old_password || pwForm.new_password.length < 6) ? 0.5 : 1 }}
+                >
+                  Update Password
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Buttons */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

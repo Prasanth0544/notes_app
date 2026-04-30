@@ -2031,6 +2031,20 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
           API={API}
           getToken={getToken}
           onClose={() => setShowProfileEdit(false)}
+          onChangePassword={async (old_password, new_password) => {
+            try {
+              const res = await fetch(API + '/auth/password', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+                body: JSON.stringify({ old_password, new_password })
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || 'Failed to update password');
+              showToastMsg('✅ Password updated successfully');
+            } catch (err) {
+              showToastMsg('❌ ' + err.message);
+            }
+          }}
           onSave={async (formData) => {
             try {
               const updated = await apiFetch('/auth/profile', { method: 'PUT', body: JSON.stringify(formData) });
