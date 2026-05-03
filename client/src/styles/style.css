@@ -466,9 +466,38 @@ body { display: flex; }
 .editor-body blockquote { border-left: 3px solid var(--accent); padding-left: 14px; color: var(--muted); margin: 8px 0; }
 .editor-body ul, .editor-body ol { padding-left: 24px; }
 .editor-body li { margin: 4px 0; }
+
+/* Parenthesized numbering: 1) 2) 3) */
+.editor-body ol.nv-paren-list { list-style-type: none !important; counter-reset: nv-paren; position: relative; }
+.editor-body ol.nv-paren-list > li { counter-increment: nv-paren; position: relative; list-style-type: none !important; }
+.editor-body ol.nv-paren-list > li::before {
+  content: counter(nv-paren) ") ";
+  position: absolute;
+  left: -20px;
+  font-weight: normal;
+  color: var(--fg);
+}
 .editor-body a { color: var(--accent2); text-decoration: underline; }
 .editor-body hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 .editor-body pre { background: var(--pre-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: monospace; overflow-x: auto; margin: 10px 0; }
+
+/* ─── Google Featured-Snippet Highlight ─────────── */
+.editor-body .nv-google-snippet,
+.editor-body mark {
+  background-color: #e8eaed !important;
+  color: #6b86d3 !important;
+  font-weight: 500;
+  border: 1px solid #dadce0 !important;
+  box-shadow: 0 2px 0px rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+  padding: 2px 7px;
+  font-family: 'Consolas', 'Monaco', monospace !important;
+  font-size: 1em !important;
+  display: inline-block;
+  vertical-align: baseline;
+  margin: 0 2px;
+  line-height: 1.2;
+}
 
 /* ─── Text Box (MS Word style) ───────────────────── */
 .editor-body .nv-shape {
@@ -492,6 +521,14 @@ body { display: flex; }
   cursor: text;
   overflow: hidden; /* Text boxes usually clip or scroll. MS Word clips. */
 }
+
+.editor-body .nv-shape-content:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  pointer-events: none;
+  font-style: italic;
+}
+
 /* Handles */
 .editor-body .nv-shape-handle {
   position: absolute;

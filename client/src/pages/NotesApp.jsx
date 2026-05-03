@@ -133,7 +133,7 @@ export default function NotesApp() {
     });
   }
 
-  function escHTML(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escHTML(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   // Reuse a single detached element for stripHTML instead of creating one each call
   const stripHTMLDiv = useRef(document.createElement('div'));
   function stripHTML(h) { stripHTMLDiv.current.innerHTML = h; return stripHTMLDiv.current.textContent || ''; }
@@ -153,7 +153,7 @@ export default function NotesApp() {
       try {
         const errorData = await res.json();
         if (errorData.error) errorMsg = errorData.error;
-      } catch {}
+      } catch { }
       const error = new Error(errorMsg);
       error.status = res.status;
       throw error;
@@ -192,7 +192,7 @@ export default function NotesApp() {
         successCount = 0;
         await syncQueue(API, getToken());
         // Refresh UI after sync
-        loadNotesList('', '').catch(() => {});
+        loadNotesList('', '').catch(() => { });
         loadFolders();
       } else if (!reachable && isOnlineRef.current) {
         // Was online, server went away
@@ -228,12 +228,12 @@ export default function NotesApp() {
     try {
       const cached = JSON.parse(localStorage.getItem('nv_user') || '{}');
       if (cached.name) setUser(cached);
-    } catch {}
+    } catch { }
     try {
       const u = await apiFetch('/auth/me');
       localStorage.setItem('nv_user', JSON.stringify(u));
       setUser(u);
-    } catch {}
+    } catch { }
   }
 
   // ─── Load Notes List ───────────────────────────────
@@ -245,8 +245,8 @@ export default function NotesApp() {
       if (q) url += `q=${encodeURIComponent(q)}&`;
       if (folder) url += `folder=${encodeURIComponent(folder)}&`;
       notes = await apiFetch(url);
-      cacheNotes(notes).catch(() => {});
-      setLastSync().catch(() => {}); // track last successful sync timestamp
+      cacheNotes(notes).catch(() => { });
+      setLastSync().catch(() => { }); // track last successful sync timestamp
     } catch (e) {
       if (!e.message.includes('Unauthorized')) {
         // API failed — fall back to offline cache
@@ -287,7 +287,7 @@ export default function NotesApp() {
         // Always try API first
         note = await apiFetch(`/notes/${id}`);
         noteCacheRef.current.set(id, note);
-        cacheNote(note).catch(() => {});
+        cacheNote(note).catch(() => { });
       } catch {
         // API failed — try offline cache
         note = await getOfflineNote(id).catch(() => null);
@@ -333,7 +333,7 @@ export default function NotesApp() {
     try {
       // Create note in the target folder
       const note = await apiFetch('/notes', { method: 'POST', body: JSON.stringify({ title: 'Untitled Note', content: '', tags: [], folder: targetFolder }) });
-      cacheNote(note).catch(() => {});
+      cacheNote(note).catch(() => { });
       await loadNotesList('');
       loadFolders();
       await openNote(note.id);
@@ -357,10 +357,10 @@ export default function NotesApp() {
       await apiFetch(`/notes/${id}`, { method: 'DELETE' });
       // API did the trash — just update local IDB cache (no sync_queue)
       const cached = await getOfflineNote(id);
-      if (cached) { cached.deleted_at = Date.now(); cached.is_dirty = false; cacheNote(cached).catch(() => {}); }
+      if (cached) { cached.deleted_at = Date.now(); cached.is_dirty = false; cacheNote(cached).catch(() => { }); }
     } catch {
       // API unreachable — queue for sync
-      await trashNoteOffline(id).catch(() => {});
+      await trashNoteOffline(id).catch(() => { });
     }
     setActiveIdState(null);
     setIsDirty(false);
@@ -389,7 +389,7 @@ export default function NotesApp() {
       showToastMsg('♻️ Note restored');
     } catch {
       // Offline fallback
-      await restoreNoteOffline(id).catch(() => {});
+      await restoreNoteOffline(id).catch(() => { });
       showToastMsg('♻️ Restored offline — will sync later');
     }
     await loadTrash();
@@ -404,7 +404,7 @@ export default function NotesApp() {
       showToastMsg('🗑️ Permanently deleted');
     } catch {
       // Offline fallback
-      await permanentDeleteOffline(id).catch(() => {});
+      await permanentDeleteOffline(id).catch(() => { });
       showToastMsg('🗑️ Deleted offline — will sync later');
     }
     await loadTrash();
@@ -452,7 +452,7 @@ export default function NotesApp() {
       // data is [{name, last_accessed}, ...]
       setFolders(data.map(f => f.name));
       folderRankingRef.current = new Map(data.map(f => [f.name, f.last_accessed || 0]));
-      cacheFolders(data).catch(() => {});
+      cacheFolders(data).catch(() => { });
       return data;
     } catch {
       // Offline fallback
@@ -479,7 +479,7 @@ export default function NotesApp() {
     setTimeout(() => folderAccessTimers.current.delete(folderName), 2000);
     // Fire-and-forget API call
     apiFetch(`/notes/folders/${encodeURIComponent(folderName)}/access`,
-      { method: 'PUT' }).catch(() => {});
+      { method: 'PUT' }).catch(() => { });
   }
 
   async function createFolder() {
@@ -491,7 +491,7 @@ export default function NotesApp() {
     } catch (e) {
       if (e.message?.includes('already exists')) { showToastMsg('⚠️ Folder already exists'); return; }
       // Offline fallback
-      await createFolderOffline(name.trim()).catch(() => {});
+      await createFolderOffline(name.trim()).catch(() => { });
       showToastMsg(`📁 Folder created offline — will sync later`);
     }
     await loadFolders();
@@ -520,7 +520,7 @@ export default function NotesApp() {
       showToastMsg(`🗑️ Folder "${folderName}" deleted`);
     } catch {
       // Offline fallback
-      await deleteFolderOffline(folderName).catch(() => {});
+      await deleteFolderOffline(folderName).catch(() => { });
       showToastMsg(`🗑️ Folder deleted offline — will sync later`);
     }
     if (activeFolder === folderName) setActiveFolder('');
@@ -568,11 +568,11 @@ export default function NotesApp() {
       await apiFetch(`/notes/${noteId}`, { method: 'DELETE' });
       // API handled it — just update IDB cache (no sync_queue)
       const cached = await getOfflineNote(noteId);
-      if (cached) { cached.deleted_at = Date.now(); cached.is_dirty = false; cacheNote(cached).catch(() => {}); }
+      if (cached) { cached.deleted_at = Date.now(); cached.is_dirty = false; cacheNote(cached).catch(() => { }); }
       showToastMsg('🗑️ Moved to Trash');
     } catch {
       // Offline fallback — queue for sync
-      await trashNoteOffline(noteId).catch(() => {});
+      await trashNoteOffline(noteId).catch(() => { });
       showToastMsg('🗑️ Trashed offline — will sync later');
     }
     if (activeIdRef.current === noteId) setActiveIdState(null);
@@ -592,7 +592,7 @@ export default function NotesApp() {
         body: JSON.stringify({ title: newTitle.trim(), content: note?.content || '', tags: note?.tags || [] }),
       });
       noteCacheRef.current.set(noteId, updated);
-      cacheNote(updated).catch(() => {});
+      cacheNote(updated).catch(() => { });
       if (activeIdRef.current === noteId) { setNoteTitle(newTitle.trim()); titleRef.current = newTitle.trim(); }
       showToastMsg('✏️ Note renamed');
     } catch {
@@ -639,7 +639,7 @@ export default function NotesApp() {
       });
       noteCacheRef.current.set(id, updated);
       setNoteDate('Last saved: ' + fmtDate(updated.modified));
-      cacheNote(updated).catch(() => {});
+      cacheNote(updated).catch(() => { });
       setIsDirty(false);
       setSaveStatus('ok');
     } catch (e) {
@@ -677,6 +677,20 @@ export default function NotesApp() {
       }
     }, 900);
   }
+
+  // ─── Ctrl+S to Save ───────────────────────────────
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        clearTimeout(saveTimerRef.current);
+        saveCurrentNote();
+        showToastMsg('💾 Note saved');
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [saveCurrentNote]);
 
   // ─── Unsaved Modal ─────────────────────────────────
   function showUnsavedModal() {
@@ -771,7 +785,7 @@ export default function NotesApp() {
     if (!rows || !cols) return;
     const r = parseInt(rows); const c = parseInt(cols);
     if (r < 1 || c < 1 || r > 50 || c > 50) { showToastMsg('⚠️ Invalid table size'); return; }
-    
+
     let tableHtml = '<table style="border-collapse:collapse;width:100%;margin:12px 0;"><tbody>';
     for (let i = 0; i < r; i++) {
       tableHtml += '<tr>';
@@ -781,7 +795,7 @@ export default function NotesApp() {
       tableHtml += '</tr>';
     }
     tableHtml += '</tbody></table><p><br></p>';
-    
+
     document.execCommand('insertHTML', false, tableHtml);
     scheduleSave();
     showToastMsg('📊 Table inserted');
@@ -789,8 +803,45 @@ export default function NotesApp() {
 
   // ─── Advanced Text Formatting ─────────────────────
   function toggleHighlight(color) {
-    const c = color || '#00ff00';
+    const c = color || '#3dd6c8';
+    editorRef.current?.focus({ preventScroll: true });
+    if (savedRangeRef.current) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    }
     document.execCommand('backColor', false, c);
+    scheduleSave();
+  }
+
+  // ─── Google Featured-Snippet Highlight ────────────
+  function applyGoogleSnippetHighlight() {
+    editorRef.current?.focus({ preventScroll: true });
+    if (savedRangeRef.current) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) { showToastMsg('⚠️ Select text first'); return; }
+    if (!sel.toString()) return;
+    const range = sel.getRangeAt(0);
+    // Extract selected content (preserves bold, italic, colors, etc.)
+    const contents = range.extractContents();
+    // Wrap in snippet span
+    const wrapper = document.createElement('span');
+    wrapper.className = 'nv-google-snippet';
+    wrapper.appendChild(contents);
+    // Insert wrapper + zero-width space to escape cursor
+    range.insertNode(wrapper);
+    const zwsp = document.createTextNode('\u200B');
+    wrapper.after(zwsp);
+    // Move cursor after the snippet
+    const newRange = document.createRange();
+    newRange.setStartAfter(zwsp);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
     scheduleSave();
   }
 
@@ -821,7 +872,7 @@ export default function NotesApp() {
     const el = editorRef.current;
     if (!el) return;
     el.focus({ preventScroll: true });
-    
+
     // Default position near center of editor view
     const scrollTop = el.scrollTop || 0;
     const top = scrollTop + 50;
@@ -829,7 +880,7 @@ export default function NotesApp() {
 
     const html = `
       <div class="nv-shape" contenteditable="false" style="left: ${left}px; top: ${top}px; width: 250px; height: 100px;">
-        <div class="nv-shape-content" contenteditable="true"><p>Type here…</p></div>
+        <div class="nv-shape-content" contenteditable="true" data-placeholder="Type here…"></div>
         <div class="nv-shape-handle nw" data-handle="nw"></div>
         <div class="nv-shape-handle n" data-handle="n"></div>
         <div class="nv-shape-handle ne" data-handle="ne"></div>
@@ -839,9 +890,9 @@ export default function NotesApp() {
         <div class="nv-shape-handle s" data-handle="s"></div>
         <div class="nv-shape-handle se" data-handle="se"></div>
       </div><p><br></p>`;
-      
+
     document.execCommand('insertHTML', false, html);
-    
+
     // Make the new shape active and focus it
     const shapes = el.querySelectorAll('.nv-shape');
     if (shapes.length > 0) {
@@ -969,7 +1020,7 @@ export default function NotesApp() {
     const el = editorRef.current;
     if (!el) return;
     const last = el.lastElementChild;
-    const BLOCK_TAGS = new Set(['TABLE','BLOCKQUOTE','PRE','HR','DIV','UL','OL','FIGURE']);
+    const BLOCK_TAGS = new Set(['TABLE', 'BLOCKQUOTE', 'PRE', 'HR', 'DIV', 'UL', 'OL', 'FIGURE']);
     if (last && BLOCK_TAGS.has(last.tagName)) {
       const p = document.createElement('p');
       p.innerHTML = '<br>';
@@ -1094,10 +1145,10 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
       showToastMsg('⚠️ Enter number 1-30');
       return;
     }
-    
+
     // Make sure we select the editor
     editorRef.current?.focus({ preventScroll: true });
-    
+
     // Restore the exact caret position/selection we had before clicking the input box
     if (savedRangeRef.current) {
       const sel = window.getSelection();
@@ -1111,7 +1162,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     // Tell the browser natively to switch to size 7 for the selection OR for the current caret
     // This allows Chrome to completely handle splitting nested DOM elements when you change sizes mid-paragraph!
     document.execCommand('fontSize', false, '7');
-    
+
     // If text was selected, and Chrome wrapped it instantly, update it immediately:
     document.querySelectorAll('font[size="7"]:not([data-old="1"])').forEach(f => {
       f.style.fontSize = size + 'pt';
@@ -1232,7 +1283,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
     if (count === 0) { showToastMsg('⚠️ No notes to export'); return; }
     const blob = await zip.generateAsync({ type: 'blob' });
-    saveAs(blob, `NoteVault_Backup_${new Date().toISOString().slice(0,10)}.zip`);
+    saveAs(blob, `NoteVault_Backup_${new Date().toISOString().slice(0, 10)}.zip`);
     showToastMsg(`✅ Exported ${count} notes as ZIP`);
   }
 
@@ -1257,7 +1308,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
     if (count === 0) { showToastMsg('⚠️ No notes in this folder'); return; }
     const safeName = folderName.replace(/[^a-zA-Z0-9 _-]/g, '');
     const blob = await zip.generateAsync({ type: 'blob' });
-    saveAs(blob, `NoteVault_${safeName}_${new Date().toISOString().slice(0,10)}.zip`);
+    saveAs(blob, `NoteVault_${safeName}_${new Date().toISOString().slice(0, 10)}.zip`);
     showToastMsg(`✅ Exported ${count} notes from ${folderName}`);
   }
 
@@ -1267,7 +1318,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
     // Step 1: IDB warm-up — load notes already cached with content from previous sessions
     let cachedIds = new Set();
-    try { cachedIds = await getNoteIdsWithContent(); } catch {}
+    try { cachedIds = await getNoteIdsWithContent(); } catch { }
 
     for (const n of loadedNotes) {
       if (!cache.has(n.id) && cachedIds.has(n.id)) {
@@ -1276,7 +1327,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
           if (fromIdb && (fromIdb.content || fromIdb.content_compressed)) {
             cache.set(n.id, fromIdb);
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -1285,7 +1336,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
       const serverIds = loadedNotes.map(n => n.id);
       const removed = await cleanupStaleNotes(serverIds);
       if (removed > 0) console.log(`🧹 Cleaned ${removed} stale notes from IDB`);
-    } catch {}
+    } catch { }
 
     // Step 2: Build ranked queue of notes NOT yet in memory cache
     const uncached = loadedNotes.filter(n => !cache.has(n.id));
@@ -1339,7 +1390,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
       try {
         const full = await apiFetch(`/notes/${n.id}`);
         cache.set(n.id, full);
-        cacheNote(full).catch(() => {});
+        cacheNote(full).catch(() => { });
         consecutiveFailures = 0;
       } catch {
         consecutiveFailures++;
@@ -1370,13 +1421,13 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         if (notes.length > 0) openNote(notes[0].id);
       })]);
       // Request persistent storage to prevent browser eviction
-      requestPersistentStorage().catch(() => {});
+      requestPersistentStorage().catch(() => { });
       // Log storage usage for diagnostics
       getStorageEstimate().then(est => {
         if (est && est.percentUsed > 80) {
           console.warn(`⚠️ IndexedDB storage: ${est.usedMB}MB / ${est.totalMB}MB (${est.percentUsed}%)`);
         }
-      }).catch(() => {});
+      }).catch(() => { });
       // Background prefetch with folder ranking + progress toasts
       setTimeout(() => prefetchAllNotes(loadedNotes, activeFolder), 1500);
       // Show ready toast based on actual server reachability
@@ -1461,7 +1512,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
     function onMouseMove(e) {
       if (!currentShape) return;
-      
+
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
 
@@ -1635,10 +1686,10 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                   >⋮</button>
                   {folderMenu === f && (
                     <div style={{ position: 'absolute', right: 8, top: 28, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 140, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
-                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameFolder(f)}>✏️ Rename</button>
-                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => { setFolderMenu(null); exportFolder(f); }}>📤 Export folder</button>
+                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => renameFolder(f)}>✏️ Rename</button>
+                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => { setFolderMenu(null); exportFolder(f); }}>📤 Export folder</button>
                       <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => { setFolderMenu(null); deleteFolder(f); }}>🗑️ Delete folder</button>
+                      <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => { setFolderMenu(null); deleteFolder(f); }}>🗑️ Delete folder</button>
                     </div>
                   )}
                 </div>
@@ -1661,16 +1712,16 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                     >⋮</button>
                     {noteMenu === n.id && (
                       <div style={{ position: 'absolute', right: 4, top: 22, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 150, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
-                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameNote(n.id)}>✏️ Rename</button>
-                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => togglePin(n.id)}>{n.pinned ? '📌 Unpin' : '📌 Pin'}</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => renameNote(n.id)}>✏️ Rename</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => togglePin(n.id)}>{n.pinned ? '📌 Unpin' : '📌 Pin'}</button>
                         <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
                         <div style={{ padding: '3px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Move to</div>
-                        <button style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickMoveToFolder(n.id, '')}>📄 Unfiled</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => quickMoveToFolder(n.id, '')}>📄 Unfiled</button>
                         {folders.filter(ff => ff !== f).map(ff => (
-                          <button key={ff} style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickMoveToFolder(n.id, ff)}>📁 {ff}</button>
+                          <button key={ff} style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => quickMoveToFolder(n.id, ff)}>📁 {ff}</button>
                         ))}
                         <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickDelete(n.id)}>🗑️ Delete</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => quickDelete(n.id)}>🗑️ Delete</button>
                       </div>
                     )}
                   </div>
@@ -1709,17 +1760,17 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                     >⋮</button>
                     {noteMenu === n.id && (
                       <div style={{ position: 'absolute', right: 4, top: 22, zIndex: 100, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 150, fontFamily: 'var(--font)' }} onClick={e => e.stopPropagation()}>
-                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => renameNote(n.id)}>✏️ Rename</button>
-                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => togglePin(n.id)}>{n.pinned ? '📌 Unpin' : '📌 Pin'}</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => renameNote(n.id)}>✏️ Rename</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => togglePin(n.id)}>{n.pinned ? '📌 Unpin' : '📌 Pin'}</button>
                         {folders.length > 0 && (<>
                           <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
                           <div style={{ padding: '3px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Move to</div>
                           {folders.map(ff => (
-                            <button key={ff} style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickMoveToFolder(n.id, ff)}>📁 {ff}</button>
+                            <button key={ff} style={{ width: '100%', textAlign: 'left', padding: '5px 12px 5px 18px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.72rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => quickMoveToFolder(n.id, ff)}>📁 {ff}</button>
                           ))}
                         </>)}
                         <div style={{ borderTop: '1px solid var(--border)', margin: '2px 0' }} />
-                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => quickDelete(n.id)}>🗑️ Delete</button>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--danger)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(248,113,113,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => quickDelete(n.id)}>🗑️ Delete</button>
                       </div>
                     )}
                   </div>
@@ -1877,9 +1928,27 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
 
             {/* Title Bar */}
             {!titleBarCollapsed && (
-              <div className="editor-topbar">
-                <input type="text" className="note-title-input" placeholder="Note title…"
+              <div className="editor-topbar" style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+                <input type="text" className="note-title-input" placeholder="Note title…" style={{ flex: 1 }}
                   value={noteTitle} onChange={e => { setNoteTitle(e.target.value); titleRef.current = e.target.value; setOpenTabs(prev => prev.map(t => t.id === activeId ? { ...t, title: e.target.value } : t)); scheduleSave(); }} />
+                <div className="titlebar-actions" style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 10, flexShrink: 0 }}>
+                  <button className="tb-btn tb-save" onClick={() => { saveCurrentNote(); showToastMsg('💾 Saved!'); }} title="Save (Ctrl+S)">💾 Save</button>
+                  <button className="tb-btn tb-saveas" onClick={saveAsFile} title="Download as file">📥 Download</button>
+                  <div style={{ position: 'relative', display: 'inline-block' }}>
+                    <button className="tb-btn" onClick={() => setShowExportMenu(!showExportMenu)} title="Export note">📤 Export</button>
+                    {showExportMenu && (
+                      <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 180, zIndex: 200, fontFamily: 'var(--font)' }}>
+                        <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Current Note</div>
+                        {[{ f: 'txt', icon: '📄', label: 'Plain Text (.txt)' }, { f: 'md', icon: '📝', label: 'Markdown (.md)' }, { f: 'html', icon: '🌐', label: 'HTML (.html)' }].map(o => (
+                          <button key={o.f} style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => exportCurrentNote(o.f)}>{o.icon} {o.label}</button>
+                        ))}
+                        <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+                        <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>All Notes</div>
+                        <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={exportAllNotes}>📦 Export All as ZIP</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1922,14 +1991,17 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               <button className="tb-btn" title="Superscript" onMouseDown={e => { e.preventDefault(); applySuperscript(); }}>x<sup>²</sup></button>
               <button className="tb-btn" title="Subscript" onMouseDown={e => { e.preventDefault(); applySubscript(); }}>x<sub>₂</sub></button>
 
-              {/* ── Mark (Highlight) : Normal=Green / Custom=Color Picker ── */}
+              {/* ── Mark (Highlight) : Mint / Google Snippet / Custom ── */}
               <select className="tb-select" title="Highlight mode" value={markMode}
                 style={{ width: '80px' }}
                 onChange={e => {
-                  setMarkMode(e.target.value);
-                  if (e.target.value === 'normal') toggleHighlight('#00ff00');
+                  const v = e.target.value;
+                  setMarkMode(v);
+                  if (v === 'normal') { toggleHighlight('#09ed10ff'); setTimeout(() => setMarkMode('normal'), 0); }
+                  else if (v === 'google') { applyGoogleSnippetHighlight(); setTimeout(() => setMarkMode('normal'), 0); }
                 }}>
                 <option value="normal">🖍️ Mark</option>
+                <option value="google">🔵 Google</option>
                 <option value="custom">Custom</option>
               </select>
               {markMode === 'custom' && (
@@ -1997,7 +2069,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                       { style: 'lower-roman', lines: ['i.', 'ii.', 'iii.'], label: 'i. ii. iii.' },
                       { style: 'upper-alpha', lines: ['A.', 'B.', 'C.'], label: 'A. B. C.' },
                       { style: 'lower-alpha', lines: ['a.', 'b.', 'c.'], label: 'a. b. c.' },
-                      { style: '"decimal"', lines: ['1)', '2)', '3)'], label: '1) 2) 3)', extra: 'decimal' },
+                      { style: 'decimal', lines: ['1)', '2)', '3)'], label: '1) 2) 3)', paren: true },
                     ].map((n, i) => (
                       <button key={i} title={n.label}
                         style={{ padding: '6px 4px', border: '1px solid var(--border)', borderRadius: 6, background: 'transparent', color: 'var(--fg)', fontSize: '.65rem', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, minHeight: 50 }}
@@ -2010,7 +2082,14 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                           const sel = window.getSelection();
                           let node = sel.anchorNode;
                           while (node && node.tagName !== 'OL') node = node.parentElement;
-                          if (node) node.style.listStyleType = n.extra || n.style;
+                          if (node) {
+                            node.style.listStyleType = n.style;
+                            if (n.paren) {
+                              node.classList.add('nv-paren-list');
+                            } else {
+                              node.classList.remove('nv-paren-list');
+                            }
+                          }
                           scheduleSave();
                         }}>
                         {n.lines.map((l, j) => <span key={j} style={{ lineHeight: 1.3 }}>{l} ────</span>)}
@@ -2043,15 +2122,15 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 <option value="custom">Custom</option>
               </select>
               {sizeMode === 'custom' && (
-                <input type="number" className="tb-select" min="1" max="30" 
+                <input type="number" className="tb-select" min="1" max="30"
                   title="Font size (1-30)" placeholder="12" style={{ width: '50px', height: '28px' }}
-                  value={directFontSize} 
+                  value={directFontSize}
                   onChange={e => setDirectFontSize(e.target.value)}
-                  onKeyDown={e => { 
-                    if (e.key === 'Enter') { 
-                      e.preventDefault(); 
-                      setDirectTextSize(directFontSize); 
-                    } 
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      setDirectTextSize(directFontSize);
+                    }
                   }}
                   onBlur={() => setDirectTextSize(directFontSize)}
                 />
@@ -2062,7 +2141,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 style={{ width: '80px' }}
                 onChange={e => {
                   setTextColorMode(e.target.value);
-                  if (e.target.value === 'normal') execCmd('foreColor', '#e2e8f0');
+                  if (e.target.value === 'normal') execCmd('foreColor', '#19eb6aff');
                 }}>
                 <option value="normal">Color ⓝ</option>
                 <option value="custom">Custom</option>
@@ -2152,24 +2231,6 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               <button className="tb-btn" onClick={() => { document.execCommand('undo'); scheduleSave(); }}>↩ Undo</button>
               <button className="tb-btn" onClick={() => { document.execCommand('redo'); scheduleSave(); }}>↪ Redo</button>
 
-              <span className="tb-divider" />
-
-              <button className="tb-btn tb-save" onClick={() => { saveCurrentNote(); showToastMsg('💾 Saved!'); }}>💾 Save</button>
-              <button className="tb-btn tb-saveas" onClick={saveAsFile}>📥Download</button>
-              <div style={{ position: 'relative', display: 'inline-block' }}>
-                <button className="tb-btn" onClick={() => setShowExportMenu(!showExportMenu)} title="Export note">📤 Export</button>
-                {showExportMenu && (
-                  <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 180, zIndex: 200, fontFamily: 'var(--font)' }}>
-                    <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Current Note</div>
-                    {[{f:'txt',icon:'📄',label:'Plain Text (.txt)'},{f:'md',icon:'📝',label:'Markdown (.md)'},{f:'html',icon:'🌐',label:'HTML (.html)'}].map(o => (
-                      <button key={o.f} style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => exportCurrentNote(o.f)}>{o.icon} {o.label}</button>
-                    ))}
-                    <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
-                    <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>All Notes</div>
-                    <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={exportAllNotes}>📦 Export All as ZIP</button>
-                  </div>
-                )}
-              </div>
             </div>
 
             {/* Editor body */}
@@ -2182,8 +2243,8 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 const lastChild = el.lastElementChild || el.lastChild;
                 const clickY = e.clientY;
                 const editorRect = el.getBoundingClientRect();
-                const contentBottom = lastChild 
-                  ? lastChild.getBoundingClientRect().bottom 
+                const contentBottom = lastChild
+                  ? lastChild.getBoundingClientRect().bottom
                   : editorRect.top;
                 // If clicked below all content, add empty lines to fill to that point
                 if (clickY > contentBottom + 5) {
@@ -2207,7 +2268,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
               }}
               onInput={() => {
                 debouncedFontQuery();
-                debouncedUpdateWordCount(); ensureTrailingParagraph(); scheduleSave(); 
+                debouncedUpdateWordCount(); ensureTrailingParagraph(); scheduleSave();
               }}
               onKeyDown={e => {
                 // Ctrl+Up/Down: same as toolbar 📏↑ / 📏↓ buttons
@@ -2261,12 +2322,12 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
                 {showExportMenu && (
                   <div style={{ position: 'absolute', bottom: '100%', right: 0, marginBottom: 4, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.3)', padding: '4px 0', minWidth: 160, zIndex: 200, fontFamily: 'var(--font)' }}>
                     <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>Current Note</div>
-                    {[{f:'txt',icon:'📄',label:'Plain Text (.txt)'},{f:'md',icon:'📝',label:'Markdown (.md)'},{f:'html',icon:'🌐',label:'HTML (.html)'}].map(o => (
-                      <button key={o.f} style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={() => exportCurrentNote(o.f)}>{o.icon} {o.label}</button>
+                    {[{ f: 'txt', icon: '📄', label: 'Plain Text (.txt)' }, { f: 'md', icon: '📝', label: 'Markdown (.md)' }, { f: 'html', icon: '🌐', label: 'HTML (.html)' }].map(o => (
+                      <button key={o.f} style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={() => exportCurrentNote(o.f)}>{o.icon} {o.label}</button>
                     ))}
                     <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
                     <div style={{ padding: '4px 12px', fontSize: '.65rem', color: 'var(--muted)', fontWeight: 600 }}>All Notes</div>
-                    <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background='rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background='none'} onClick={exportAllNotes}>📦 Export All as ZIP</button>
+                    <button style={{ width: '100%', textAlign: 'left', padding: '7px 12px', background: 'none', border: 'none', color: 'var(--fg)', fontSize: '.75rem', cursor: 'pointer', fontFamily: 'var(--font)' }} onMouseEnter={e => e.target.style.background = 'rgba(108,99,255,.1)'} onMouseLeave={e => e.target.style.background = 'none'} onClick={exportAllNotes}>📦 Export All as ZIP</button>
                   </div>
                 )}
               </div>
