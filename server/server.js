@@ -64,6 +64,7 @@ async function main() {
   await db.collection('pending_registrations').createIndex({ createdAt: 1 }, { expireAfterSeconds: 600 }); // 10 min TTL
   await db.collection('user_folders').createIndex({ user_id: 1, deleted_at: 1 });
   await db.collection('auth_codes').createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 }); // 60s TTL
+  await db.collection('oauth_states').createIndex({ createdAt: 1 }, { expireAfterSeconds: 600 }); // 10 min TTL
 
   // Token blacklist for logout
   const { initBlacklist } = require('./middleware/auth');
@@ -161,4 +162,3 @@ main().catch(err => {
 // Graceful shutdown
 process.on('SIGTERM', () => { console.log('\n  🛑 SIGTERM received — shutting down...'); process.exit(0); });
 process.on('SIGINT',  () => { console.log('\n  🛑 SIGINT received — shutting down...');  process.exit(0); });
-

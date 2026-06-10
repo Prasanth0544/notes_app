@@ -401,6 +401,24 @@ module.exports = function (db) {
     }
   });
 
+  // ── Empty entire trash ─────────────────────────────
+  router.delete('/trash/empty', authMiddleware, async (req, res) => {
+    try {
+      const result = await notes.deleteMany({
+        user_id: req.userId,
+        deleted_at: { $exists: true },
+      });
+      await userFolders.deleteMany({
+        user_id: req.userId,
+        deleted_at: { $exists: true },
+      });
+      res.json({ ok: true, deleted: result.deletedCount });
+    } catch (err) {
+      console.error('Empty trash error:', err);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
   // ── Soft-delete note (move to trash) ──────────────
   router.delete('/:id', authMiddleware, async (req, res) => {
     try {
@@ -446,24 +464,5 @@ module.exports = function (db) {
       res.status(400).json({ error: 'Invalid ID' });
     }
   });
-  // ── Empty entire trash ─────────────────────────────
-  router.delete('/trash/empty', authMiddleware, async (req, res) => {
-    try {
-      const result = await notes.deleteMany({
-        user_id: req.userId,
-        deleted_at: { $exists: true },
-      });
-      // Also remove any trashed folders
-      await userFolders.deleteMany({
-        user_id: req.userId,
-        deleted_at: { $exists: true },
-      });
-      res.json({ ok: true, deleted: result.deletedCount });
-    } catch (err) {
-      console.error('Empty trash error:', err);
-      res.status(500).json({ error: 'Server error' });
-    }
-  });
-
   return router;
 };

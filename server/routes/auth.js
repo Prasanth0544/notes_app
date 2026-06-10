@@ -24,12 +24,25 @@ function getHashString(hash) {
 module.exports = function (db) {
   const users = db.collection('users');
   const authCodes = db.collection('auth_codes');
+  const oauthStates = db.collection('oauth_states');
 
   // Helper: generate a one-time auth code and store it (60s TTL via index)
   async function generateAuthCode(token) {
     const code = crypto.randomBytes(32).toString('hex');
     await authCodes.insertOne({ code, token, createdAt: new Date() });
     return code;
+  }
+
+  async function createOAuthState(provider, linkToken = '') {
+    const state = crypto.randomBytes(32).toString('hex');
+    await oauthStates.insertOne({ state, provider, linkToken, createdAt: new Date() });
+    return state;
+  }
+
+  async function consumeOAuthState(state, provider) {
+    if (!state) return null;
+    const doc = await oauthStates.findOneAndDelete({ state, provider });
+    return doc || null;
   }
 
   // ════════════════════════════════════════════════════
@@ -274,16 +287,16 @@ module.exports = function (db) {
   const GOOGLE_CLIENT_SEC = process.env.GOOGLE_CLIENT_SECRET || '';
   const APP_URL           = process.env.APP_URL || 'http://localhost:4000';
 
-  router.get('/google', (req, res) => {
+  router.get('/google', async (req, res) => {
     if (!GOOGLE_CLIENT_ID) return res.status(501).json({ error: 'Google OAuth not configured' });
-    const state = req.query.link_token ? JSON.stringify({ link_token: req.query.link_token }) : '';
+    const state = await createOAuthState('google', req.query.link_token || '');
     const params = new URLSearchParams({
       client_id: GOOGLE_CLIENT_ID,
       redirect_uri: `${APP_URL}/api/auth/google/callback`,
       response_type: 'code',
       scope: 'openid email profile',
       access_type: 'online',
-      ...(state && { state }),
+      state,
     });
     res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
   });
@@ -293,6 +306,9 @@ module.exports = function (db) {
     if (!code) return res.redirect('/login.html?error=google_denied');
 
     try {
+      const stateDoc = await consumeOAuthState(req.query.state, 'google');
+      if (!stateDoc) return res.redirect('/login.html?error=invalid_state');
+
       const tokenResp = await axios.post('https://oauth2.googleapis.com/token', {
         code,
         client_id: GOOGLE_CLIENT_ID,
@@ -304,17 +320,24 @@ module.exports = function (db) {
       const idToken = tokenResp.data.id_token;
       if (!idToken) return res.redirect('/login.html?error=google_failed');
 
-      // Decode ID token payload
-      const parts = idToken.split('.');
-      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+      const verifyResp = await axios.get('https://oauth2.googleapis.com/tokeninfo', {
+        params: { id_token: idToken },
+      });
+      const payload = verifyResp.data || {};
+      if (
+        payload.aud !== GOOGLE_CLIENT_ID ||
+        !['https://accounts.google.com', 'accounts.google.com'].includes(payload.iss) ||
+        payload.email_verified === 'false'
+      ) {
+        return res.redirect('/login.html?error=google_failed');
+      }
 
       const { email, name, picture: avatar, sub: oauth_id } = payload;
       const { user } = await findOrCreateOAuthUser(users, email, name, avatar, 'google', oauth_id);
       const token = makeToken(user._id);
 
       // If linking, redirect back with code (not raw token)
-      let linkToken = null;
-      try { linkToken = JSON.parse(req.query.state || '{}').link_token; } catch {}
+      const linkToken = stateDoc.linkToken;
       if (linkToken) {
         // Link the Google provider to the account that owns this token
         const jwt = require('jsonwebtoken');
@@ -341,14 +364,14 @@ module.exports = function (db) {
   const GITHUB_CLIENT_ID  = process.env.GITHUB_CLIENT_ID || '';
   const GITHUB_CLIENT_SEC = process.env.GITHUB_CLIENT_SECRET || '';
 
-  router.get('/github', (req, res) => {
+  router.get('/github', async (req, res) => {
     if (!GITHUB_CLIENT_ID) return res.status(501).json({ error: 'GitHub OAuth not configured' });
-    const state = req.query.link_token || '';
+    const state = await createOAuthState('github', req.query.link_token || '');
     const params = new URLSearchParams({
       client_id: GITHUB_CLIENT_ID,
       redirect_uri: `${APP_URL}/api/auth/github/callback`,
       scope: 'user:email',
-      ...(state && { state }),
+      state,
     });
     res.redirect(`https://github.com/login/oauth/authorize?${params}`);
   });
@@ -358,6 +381,9 @@ module.exports = function (db) {
     if (!code) return res.redirect('/login.html?error=github_denied');
 
     try {
+      const stateDoc = await consumeOAuthState(req.query.state, 'github');
+      if (!stateDoc) return res.redirect('/login.html?error=invalid_state');
+
       const tokenResp = await axios.post('https://github.com/login/oauth/access_token', {
         client_id: GITHUB_CLIENT_ID,
         client_secret: GITHUB_CLIENT_SEC,
@@ -382,7 +408,7 @@ module.exports = function (db) {
       const token = makeToken(user._id);
 
       // If linking, redirect back with code
-      const linkToken = req.query.state || '';
+      const linkToken = stateDoc.linkToken || '';
       if (linkToken) {
         const jwt = require('jsonwebtoken');
         try {

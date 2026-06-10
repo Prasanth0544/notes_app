@@ -3,7 +3,7 @@ const isLocalhost = window.location.hostname === 'localhost' || window.location.
 const isCapacitor = isLocalhost && !window.location.port;
 const isLocalDev  = isLocalhost && !!window.location.port;
 
-const RENDER_API = 'https://notes-app-e06a.onrender.com/api';
+const RENDER_API = import.meta.env.VITE_API_URL || 'https://notes-app-e06a.onrender.com/api';
 
 let API;
 if (isCapacitor) {

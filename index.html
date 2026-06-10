@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Smooth Rounded Underline</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            font-size: 28px;
+            padding: 60px;
+            color: #202124;
+        }
+
+        .highlight {
+            /* 1. Background and Font */
+            background-color: #f1f3f4; 
+            color: #6b86d3; 
+            font-weight: 500;
+            
+            /* 2. THE CURVED UNDERLINE */
+            /* No borders on the sides/top. The shadow creates the bottom line. */
+            border: none;
+            /* 0px horizontal, 2px vertical, 0px blur. 0.3 makes it a visible smooth black */
+            box-shadow: 0 2px 0px rgba(0, 0, 0, 0.3); 
+            
+            /* 3. Rounded Corners (All sides) */
+            border-radius: 8px;
+            
+            /* 4. Shape & Typography */
+            padding: 2px 10px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.8em;
+            display: inline-block;
+            vertical-align: baseline;
+            margin: 0 4px;
+            line-height: 1.2;
+        }
+    </style>
+</head>
+<body>
+
+    <div>
+        you execute <span class="highlight">java ClassName</span>, 
+        the <span class="highlight">highlight">java.exe</span>
+    </div>
+
+</body>
+</html>

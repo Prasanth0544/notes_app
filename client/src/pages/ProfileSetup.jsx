@@ -16,7 +16,13 @@ export default function ProfileSetup() {
   const navigate = useNavigate();
   const [selectedRole, setSelectedRole] = useState('');
   const [toast, setToast] = useState({ msg: '', isError: true, show: false });
-  const [user, setUser] = useState({});
+  const [user] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('nv_user') || '{}');
+    } catch {
+      return {};
+    }
+  });
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -24,11 +30,7 @@ export default function ProfileSetup() {
     if (urlToken) localStorage.setItem('nv_token', urlToken);
     const token = localStorage.getItem('nv_token');
     if (!token) { navigate('/login'); return; }
-    try {
-      const u = JSON.parse(localStorage.getItem('nv_user') || '{}');
-      setUser(u);
-    } catch {}
-  }, []);
+  }, [navigate]);
 
   const token = localStorage.getItem('nv_token');
 

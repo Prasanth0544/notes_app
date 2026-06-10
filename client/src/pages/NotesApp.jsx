@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import API from '../config.js';
 import {
   cacheNotes, cacheNote, getOfflineNotes, getOfflineNote, getOfflineTrash,
-  saveNoteOffline, deleteNoteOffline, trashNoteOffline, restoreNoteOffline,
+  saveNoteOffline, trashNoteOffline, restoreNoteOffline,
   permanentDeleteOffline, pinNoteOffline,
   cacheFolders, getOfflineFolders, createFolderOffline, deleteFolderOffline,
-  syncQueue, getLastSync, setLastSync, getStorageEstimate, requestPersistentStorage,
+  syncQueue, setLastSync, getStorageEstimate, requestPersistentStorage,
   getNoteIdsWithContent, cleanupStaleNotes,
 } from '../offline.js';
 import TabBar from './TabBar.jsx';
@@ -29,7 +29,7 @@ export default function NotesApp() {
   const [isDirty, setIsDirty] = useState(false);
   const [currentTags, setCurrentTags] = useState([]);
   const [noteTitle, setNoteTitle] = useState('');
-  const [noteDate, setNoteDate] = useState('');
+  const [, setNoteDate] = useState('');
   const [saveStatus, setSaveStatus] = useState('ok');
   const [wordCount, setWordCount] = useState('0 words · 0 chars');
   const [search, setSearch] = useState('');
@@ -70,7 +70,7 @@ export default function NotesApp() {
   const [activeFolder, setActiveFolder] = useState('');    // '' = all notes
   const [noteFolder, setNoteFolder] = useState('');        // current note's folder
   const [openTabs, setOpenTabs] = useState([]);            // [{id, title}]
-  const [collapsedFolders, setCollapsedFolders] = useState(new Set());
+  const [expandedFolders, setExpandedFolders] = useState(new Set());
   const folderRankingRef = useRef(new Map());
   const folderAccessTimers = useRef(new Map());
 
@@ -134,10 +134,6 @@ export default function NotesApp() {
   }
 
   function escHTML(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-  // Reuse a single detached element for stripHTML instead of creating one each call
-  const stripHTMLDiv = useRef(document.createElement('div'));
-  function stripHTML(h) { stripHTMLDiv.current.innerHTML = h; return stripHTMLDiv.current.textContent || ''; }
-
   async function apiFetch(path, opts = {}) {
     const res = await fetch(API + path, {
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
@@ -348,7 +344,7 @@ export default function NotesApp() {
   }
 
   // ─── Delete Note (soft-delete → trash) ────────────
-  async function deleteNote() {
+  async function _deleteNote() {
     if (!activeIdRef.current) return;
     if (!window.confirm('Move this note to Trash?')) return;
     const id = activeIdRef.current;
@@ -498,7 +494,7 @@ export default function NotesApp() {
     setActiveFolder(name.trim());
   }
 
-  async function moveNoteToFolder(noteId, folder) {
+  async function _moveNoteToFolder(noteId, folder) {
     try {
       await apiFetch(`/notes/${noteId}`, {
         method: 'PUT',
@@ -740,7 +736,7 @@ export default function NotesApp() {
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
     let node;
     const matches = [];
-    while (node = walker.nextNode()) {
+    while ((node = walker.nextNode())) {
       const idx = node.textContent.toLowerCase().indexOf(text.toLowerCase());
       if (idx !== -1) matches.push({ node, idx });
     }
@@ -1545,7 +1541,7 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
       }
     }
 
-    function onMouseUp(e) {
+    function onMouseUp() {
       if (isDragging || isResizing) {
         isDragging = false;
         isResizing = false;
@@ -1644,14 +1640,14 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
         {/* ── Notes View — VS Code-like Tree ── */}
         {sidebarView === 'notes' && (<div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
           {/* New note + folder buttons */}
-          <div style={{ padding: '6px 12px', display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+          <div className="sidebar-action-bar">
             <button
-              style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--muted)', fontSize: '.7rem', cursor: 'pointer', fontFamily: 'var(--font)' }}
+              className="sidebar-action-btn"
               onClick={createNote}
               title="New note"
             >＋ Note</button>
             <button
-              style={{ padding: '2px 8px', borderRadius: 4, border: '1px dashed var(--border)', background: 'transparent', color: 'var(--muted)', fontSize: '.7rem', cursor: 'pointer', fontFamily: 'var(--font)' }}
+              className="sidebar-action-btn"
               onClick={createFolder}
               title="New folder"
             >＋ Folder</button>
@@ -1660,13 +1656,13 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
           {/* Folder Tree */}
           {folders.map(f => {
             const folderNotes = allNotes.filter(n => n.folder === f);
-            const isCollapsed = collapsedFolders.has(f);
+            const isCollapsed = !expandedFolders.has(f);
             return (
               <div key={f}>
                 <div
                   style={{ display: 'flex', alignItems: 'center', padding: '6px 12px', cursor: 'pointer', fontSize: '.78rem', fontWeight: 600, color: 'var(--fg)', fontFamily: 'var(--font)', borderBottom: '1px solid rgba(255,255,255,.04)', userSelect: 'none', position: 'relative' }}
                   onClick={() => {
-                    setCollapsedFolders(prev => {
+                    setExpandedFolders(prev => {
                       const next = new Set(prev);
                       next.has(f) ? next.delete(f) : next.add(f);
                       return next;
@@ -1808,13 +1804,13 @@ h1{border-bottom:2px solid #6c63ff;padding-bottom:8px}img{max-width:100%;border-
             {/* Render Trashed Folders */}
             {trashFolders.map(tf => {
               const daysLeft = Math.max(0, Math.ceil((7 - (Date.now() - new Date(tf.deleted_at).getTime()) / 86400000)));
-              const isCollapsed = collapsedFolders.has(`trash_${tf.name}`);
+              const isCollapsed = !expandedFolders.has(`trash_${tf.name}`);
               return (
                 <div key={`trash_folder_${tf.name}`} style={{ marginBottom: 4 }}>
                   <div
                     style={{ display: 'flex', alignItems: 'center', padding: '6px 12px', cursor: 'pointer', fontSize: '.78rem', fontWeight: 600, color: 'var(--muted)', fontFamily: 'var(--font)', borderBottom: '1px solid rgba(255,255,255,.04)', userSelect: 'none', position: 'relative', opacity: 0.8 }}
                     onClick={() => {
-                      setCollapsedFolders(prev => {
+                      setExpandedFolders(prev => {
                         const next = new Set(prev);
                         const key = `trash_${tf.name}`;
                         next.has(key) ? next.delete(key) : next.add(key);

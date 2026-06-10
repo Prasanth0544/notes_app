@@ -6,6 +6,29 @@ const express = require('express');
 const router = express.Router();
 const { ObjectId } = require('mongodb');
 const { authMiddleware } = require('../middleware/auth');
+const sanitizeHtml = require('sanitize-html');
+
+const SANITIZE_OPTS = {
+  allowedTags: sanitizeHtml.defaults.allowedTags.concat([
+    'img', 'h1', 'h2', 'h3', 'mark', 'sup', 'sub', 'u', 's',
+    'span', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'hr', 'br', 'pre', 'code', 'blockquote', 'font'
+  ]),
+  allowedAttributes: {
+    '*': ['style', 'class', 'id'],
+    'a': ['href', 'target', 'rel'],
+    'img': ['src', 'alt', 'width', 'height'],
+    'font': ['size', 'color', 'face'],
+    'td': ['colspan', 'rowspan'],
+    'th': ['colspan', 'rowspan'],
+  },
+  allowedSchemes: ['http', 'https', 'data', 'mailto'],
+  allowedSchemesByTag: { img: ['http', 'https', 'data'] },
+};
+
+function cleanContent(html) {
+  return html ? sanitizeHtml(html, SANITIZE_OPTS) : '';
+}
 
 module.exports = function (db) {
   const notes = db.collection('notes');
@@ -48,7 +71,7 @@ module.exports = function (db) {
         const docData = {
           user_id:  req.userId,
           title:    n.title || 'Untitled Note',
-          content:  n.content || '',
+          content:  cleanContent(n.content || ''),
           tags:     n.tags || [],
           folder:   n.folder || '',
           pinned:   n.pinned || false,

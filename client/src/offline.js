@@ -69,7 +69,9 @@ async function safeWrite(fn) {
           await tx.store.delete(clean[i].id);
         }
         await tx.done;
-      } catch {}
+      } catch (cleanupErr) {
+        console.warn('Failed to clear old IndexedDB cache:', cleanupErr);
+      }
       return await fn(); // retry
     }
     throw e;
@@ -104,30 +106,16 @@ async function decompress(compressed) {
   } catch { return null; }
 }
 
-// Store content, compressing if large
-function prepareNoteForStorage(note) {
-  const prepared = { ...note };
-  // Only compress content larger than 10KB
-  if (prepared.content && prepared.content.length > 10240 && typeof CompressionStream !== 'undefined') {
-    prepared._compress_pending = true; // mark for async compression
-  }
-  return prepared;
-}
-
 async function storeNoteWithCompression(store, note) {
-  if (note._compress_pending && note.content) {
+  if (note.content && note.content.length > 10240 && typeof CompressionStream !== 'undefined') {
     const compressed = await compress(note.content);
     if (compressed && compressed.byteLength < note.content.length * 0.8) {
       // Compression saved >20%, use it
-      const toStore = { ...note, content_compressed: compressed, content: '' };
-      delete toStore._compress_pending;
-      await store.put(toStore);
+      await store.put({ ...note, content_compressed: compressed, content: '' });
       return;
     }
   }
-  const toStore = { ...note };
-  delete toStore._compress_pending;
-  await store.put(toStore);
+  await store.put(note);
 }
 
 async function readNoteContent(note) {
@@ -496,10 +484,21 @@ export async function syncQueue(apiBase, token) {
 
   const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
 
+  async function requireOk(res, acceptedStatuses = []) {
+    if (res.ok || acceptedStatuses.includes(res.status)) return res;
+    let detail = '';
+    try {
+      const data = await res.json();
+      detail = data?.error ? `: ${data.error}` : '';
+    } catch (parseErr) {
+      detail = parseErr?.message ? `: ${parseErr.message}` : '';
+    }
+    throw new Error(`Sync request failed (${res.status})${detail}`);
+  }
+
   for (const item of items) {
-    // Skip items that have failed too many times
     if ((item.retries || 0) >= MAX_SYNC_RETRIES) {
-      console.warn('⚠️ Discarding permanently failed sync item:', item.qid, item.action, item.note_id);
+      console.warn('Discarding permanently failed sync item:', item.qid, item.action, item.note_id);
       await db.delete('sync_queue', item.qid);
       continue;
     }
@@ -511,13 +510,14 @@ export async function syncQueue(apiBase, token) {
           const res = await fetch(apiBase + '/notes', { method: 'POST', headers, body: JSON.stringify(payload) });
           if (res.ok) {
             const newNote = await res.json();
-            // Clean up local_ ID and store with real server ID
             const tx = db.transaction('notes', 'readwrite');
             await tx.store.delete(item.note_id);
             await tx.store.put({ ...newNote, folder: newNote.folder || '', pinned: newNote.pinned || false, deleted_at: null, is_dirty: false });
             await tx.done;
           } else if (res.status === 409) {
-            console.warn('Sync conflict for create:', item.note_id, '— skipping duplicate');
+            console.warn('Sync conflict for create:', item.note_id, 'skipping duplicate');
+          } else {
+            await requireOk(res);
           }
           break;
         }
@@ -531,61 +531,54 @@ export async function syncQueue(apiBase, token) {
             await tx.store.put({ ...updated, folder: updated.folder || '', pinned: updated.pinned || false, deleted_at: null, is_dirty: false });
             await tx.done;
           } else if (res.status === 409) {
-            // Conflict — server data is newer, discard local changes
-            console.warn('Sync conflict for note', item.note_id, '— server version kept');
+            console.warn('Sync conflict for note', item.note_id, 'server version kept');
+          } else {
+            await requireOk(res);
           }
           break;
         }
 
-        case 'trash': {
-          await fetch(apiBase + '/notes/' + item.note_id, { method: 'DELETE', headers });
+        case 'trash':
+          await requireOk(await fetch(apiBase + '/notes/' + item.note_id, { method: 'DELETE', headers }), [404]);
           break;
-        }
 
-        case 'restore': {
-          await fetch(apiBase + '/notes/' + item.note_id + '/restore', { method: 'POST', headers });
+        case 'restore':
+          await requireOk(await fetch(apiBase + '/notes/' + item.note_id + '/restore', { method: 'POST', headers }));
           break;
-        }
 
-        case 'permanent_delete': {
-          await fetch(apiBase + '/notes/' + item.note_id + '/permanent', { method: 'DELETE', headers });
+        case 'permanent_delete':
+          await requireOk(await fetch(apiBase + '/notes/' + item.note_id + '/permanent', { method: 'DELETE', headers }), [404]);
           break;
-        }
 
-        case 'pin': {
-          await fetch(apiBase + '/notes/' + item.note_id + '/pin', { method: 'POST', headers });
+        case 'pin':
+          await requireOk(await fetch(apiBase + '/notes/' + item.note_id + '/pin', { method: 'POST', headers }));
           break;
-        }
 
         case 'create_folder': {
           const payload = JSON.parse(item.payload);
-          await fetch(apiBase + '/notes/folders', { method: 'POST', headers, body: JSON.stringify(payload) });
+          await requireOk(await fetch(apiBase + '/notes/folders', { method: 'POST', headers, body: JSON.stringify(payload) }), [409]);
           break;
         }
 
         case 'delete_folder': {
           const payload = JSON.parse(item.payload);
-          await fetch(apiBase + '/notes/folders/' + encodeURIComponent(payload.name), { method: 'DELETE', headers });
+          await requireOk(await fetch(apiBase + '/notes/folders/' + encodeURIComponent(payload.name), { method: 'DELETE', headers }), [404]);
           break;
         }
 
         default:
-          // Legacy 'delete' action
           if (item.action === 'delete') {
-            await fetch(apiBase + '/notes/' + item.note_id, { method: 'DELETE', headers });
+            await requireOk(await fetch(apiBase + '/notes/' + item.note_id, { method: 'DELETE', headers }), [404]);
           }
           break;
       }
-      // Remove processed queue item
       await db.delete('sync_queue', item.qid);
     } catch (err) {
-      // Increment retry count instead of stopping entire queue
       const retries = (item.retries || 0) + 1;
       console.warn(`Sync item ${item.qid} failed (attempt ${retries}/${MAX_SYNC_RETRIES}):`, err.message);
       await db.put('sync_queue', { ...item, retries });
-      // Only break on network errors (continue on individual item failures)
       if (!navigator.onLine || err.name === 'TypeError') break;
     }
   }
-  console.log('✅ Sync complete');
+  console.log('Sync complete');
 }

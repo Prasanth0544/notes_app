@@ -1116,7 +1116,17 @@ body { display: flex; }
 .sidebar-nav-tab.active { background: var(--card); border-bottom-color: var(--accent); color: var(--accent2); }
 .sidebar-nav-tab.active-trash { background: var(--card); border-bottom-color: var(--danger); color: var(--danger); }
 
-.sidebar-action-bar { padding: 6px 12px; display: flex; justify-content: flex-end; gap: 6px; }
+.sidebar-action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 6px 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+}
 .sidebar-action-btn {
   padding: 2px 8px; border-radius: 4px; border: 1px dashed var(--border);
   background: transparent; color: var(--muted); font-size: .7rem; cursor: pointer; font-family: var(--font);
@@ -1190,4 +1200,3 @@ body { display: flex; }
 .toggle-bar span {
   font-size: .65rem; color: var(--muted); font-family: var(--font);
 }
-
